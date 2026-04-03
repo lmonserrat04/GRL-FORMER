@@ -1,0 +1,21 @@
+RAW_PATH : "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/cc200"
+ATLAS: "cc200"
+N_ROIS: 200
+MIN_TIMESTEPS: 116
+WINDOW_SIZE : 128
+INTERP_PATH: "./data/datasets/ABIDE_pcp/cpac/cc200_interp"
+CSV_PATH: "./data/csv/data_train.csv"
+SEED: 42     
+LABEL_COL: "DX_GROUP"    
+BATCH_SIZE: 64
+SHUFFLE: true
+NUM_WORKERS: 8
+# Hiperparametros transformer , mlp
+D_MODEL : 256
+DIM_FEEDFORWARD : 128
+NUM_ENCODER_LAYERS : 4
+N_HEADS : 4
+ENC_DROP : 0.1
+CLS_DROPOUT : 0.1
+# Hiperparametros entrenamiento
+N_EPOCHS : 500
