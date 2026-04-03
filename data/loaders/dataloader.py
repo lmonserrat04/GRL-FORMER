@@ -5,7 +5,7 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 from pathlib import Path
 import random
-from data.augmentation.augmentation import get_random_window
+from data.augmentation.augmentation import get_window
 
 
 
@@ -21,10 +21,14 @@ def get_dataloader(config: dict, df_subset: pd.DataFrame, split: str) -> DataLoa
     for key in required_keys:
         if key not in config:
             raise KeyError(f"Falta la clave requerida en config: '{key}'")
+        
+    allowed_splits = ['train', 'val', 'test']
+    if split not in allowed_splits:
+        raise ValueError("Split no reconocido, se esperaba 'train', 'val' o 'test'")
      
     
 
-    dataset = SingleAtlas(cfg=config,df_subset=df_subset ,prefix="interp_")
+    dataset = SingleAtlas(cfg=config,df_subset=df_subset , split = split, prefix="interp_")
     
 
     
@@ -64,20 +68,19 @@ def get_dataloader(config: dict, df_subset: pd.DataFrame, split: str) -> DataLoa
 
 
 class SingleAtlas(Dataset):
-    def __init__(self, *, cfg: dict,df_subset: pd.DataFrame, prefix: str = "interp_"):
+    def __init__(self, *, cfg: dict,df_subset: pd.DataFrame,split: str, prefix: str = "interp_"):
         self.cfg = cfg
+        self.split = split
 
         interp_path = Path(cfg["INTERP_PATH"]).resolve()
         if not interp_path.exists():
             raise FileNotFoundError(f"No se encontró: {interp_path}")
-
-        df: pd.DataFrame = df_subset
         
 
         print("Cargando SingleAtlas en RAM...")
 
         self.x = []
-        for _, row in tqdm(df.iterrows(), total=len(df)):
+        for _, row in tqdm(df_subset.iterrows(), total=len(df_subset)):
           
             filename = f"{prefix}{row[cfg['FILE_ID']]}_rois_{cfg['ATLAS']}.1D"
             filepath = interp_path / filename 
@@ -86,12 +89,16 @@ class SingleAtlas(Dataset):
                 torch.tensor(np.loadtxt(filepath), dtype=torch.float32)
             )
 
-        self.labels = torch.tensor(df[cfg["LABEL_COL"]].values, dtype=torch.long)
-        self.labels_strat= torch.tensor(pd.Series(df["STRATIFY"]).astype("category").cat.codes.values)
+        self.labels = torch.tensor(df_subset[cfg["LABEL_COL"]].values, dtype=torch.long)
 
-        print(f"✓ Cargado: {len(self.x)}" +
+        additional_text = ""
+        if self.split == 'train':
+            self.labels_strat= torch.tensor(pd.Series(df_subset["STRATIFY"]).astype("category").cat.codes.values)
+            additional_text = f"Nro labels estratificacion: {self.labels_strat.numel()}"
+
+        print(f"✓ Cargado: {len(self.x)} " +
               f"individuos | Labels dx únicos: {self.labels.unique().tolist() }\n"+
-              f"Nro labels estratificacion: {self.labels_strat.numel()}")
+             additional_text)
 
 
 
@@ -100,10 +107,18 @@ class SingleAtlas(Dataset):
 
     def __getitem__(self, idx: int):
         x: torch.Tensor = self.x[idx]
-        
-        window: torch.Tensor = torch.as_tensor(get_random_window(x, self.cfg["WINDOWS_SIZE"])) # Comparte memoria
+
+        if self.split == 'train':
+
+            window: torch.Tensor = torch.as_tensor(get_window(x, self.cfg["WINDOWS_SIZE"], mode= 'random')) # Comparte memoria
+
+        elif self.split == 'val' or self.split == 'test':
+            window: torch.Tensor = torch.as_tensor(get_window(x, self.cfg["WINDOWS_SIZE"], mode= 'central')) # Comparte memoria
+
+        else:
+            raise ValueError("Split no reconocido, se esperaba 'train', 'val' o 'test'")
         
         if window.shape != (self.cfg["N_ROIS"],self.cfg["WINDOWS_SIZE"]):
             raise ValueError("Error en shapes al calcular ventana aleatoria en el dataset, se esperaba (N_ROIS, WINDOWS_SIZE)")
 
-        return window, self.labels[idx]
+        return window.T, self.labels[idx] # (T, N_ROIS)

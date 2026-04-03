@@ -83,13 +83,17 @@ def interpolate_timeseries(
 
 
 
-def get_random_window(time_fmri_serie , window_size:int):
+def get_window(time_fmri_serie , window_size:int, mode: str):
     """
     Input
         Matriz de la forma (nro_ROIS, Timesteps)
     Output
-        Ventana comenzando desde timestep random de tamaño window_size
+        Ventana comenzando desde timestep (random, central) de tamaño window_size
+
     """
+    if mode not in ['random', 'central']:
+        raise ValueError("Se esperaba modo de uno de estos tipos: 'random', 'central'")
+    
 
     time_fmri_serie = time_fmri_serie.numpy().copy()
 
@@ -100,9 +104,12 @@ def get_random_window(time_fmri_serie , window_size:int):
     
     if max_start < 0:
         raise ValueError("El window_size es mayor que el tiempo total de la serie.")
-
     
-    offset = np.random.randint(0, max_start + 1)
+
+    if mode == 'random':
+        offset = np.random.randint(0, max_start + 1)
+    elif mode == 'central':
+        offset = max_start // 2
     
    
     window = time_fmri_serie[:, offset : offset + window_size]

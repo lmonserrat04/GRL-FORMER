@@ -50,9 +50,9 @@ def train_one_epoch(model:nn.Module,config: dict, train_loader:DataLoader, devic
     
     
     for _, (windows,labels) in enumerate(train_loader):
-        inputs: torch.tensor = windows.permute(0,2,1).to(device) #   Convertir de (B,NRO_ROIS,T) a (B,T,NRO_ROIS)
+        inputs = windows.to(device)
 
-        expected_shape = (config["BATCH_SIZE"], config["NRO_ROIS"], config["WINDOWS_SIZE"])
+        expected_shape = (config["BATCH_SIZE"], config["WINDOWS_SIZE"], config["NRO_ROIS"])
         if inputs.shape != expected_shape:
             raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
 
@@ -75,9 +75,9 @@ def evaluate_one_epoch(model: nn.Module,config: dict, val_loader: DataLoader, de
 
     with torch.no_grad():
         for _, (windows,labels) in enumerate(val_loader):
-            inputs = windows.permute(0,2,1).to(device) #   Convertir de (B,NRO_ROIS,T) a (B,T,NRO_ROIS)
+            inputs = windows.to(device)
 
-            expected_shape = (config["BATCH_SIZE"], config["NRO_ROIS"], config["WINDOWS_SIZE"])
+            expected_shape = (config["BATCH_SIZE"], config["WINDOWS_SIZE"], config["NRO_ROIS"])
             if inputs.shape != expected_shape:
                 raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
             
