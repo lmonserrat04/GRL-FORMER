@@ -19,3 +19,4 @@ ENC_DROP : 0.1
 CLS_DROPOUT : 0.1
 # Hiperparametros entrenamiento
 N_EPOCHS : 500
+N_SPLITS_CV : 5
