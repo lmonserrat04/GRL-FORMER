@@ -27,7 +27,7 @@ class SAT(nn.Module):
         self.classificator = Classificator(d_model, cls_dropout)
 
     def forward(self, x: torch.Tensor, mask=None):
-        x = self.encoder(x, mask=mask)       # (B, T, d_model)
+        x = self.encoder(x, mask=mask)       # (B, T, N_ROIS) -> (B, T, d_model)
         x = self.classificator(x)            # (B, 2)
         return x
 

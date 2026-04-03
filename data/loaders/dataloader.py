@@ -15,54 +15,64 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
-def get_dataloader(config: dict, split: str) -> DataLoader:
+def get_dataloader(config: dict, df_subset: pd.DataFrame, split: str) -> DataLoader:
     required_keys = ["CSV_PATH", "INTERP_PATH", "ATLAS", 
                  "LABEL_COL", "BATCH_SIZE", "WINDOWS_SIZE", "N_ROIS"]
     for key in required_keys:
         if key not in config:
             raise KeyError(f"Falta la clave requerida en config: '{key}'")
+     
+    
 
-    dataset = SingleAtlas(cfg=config, prefix="interp_")
+    dataset = SingleAtlas(cfg=config,df_subset=df_subset ,prefix="interp_")
+    
 
-    #______________Weighted Random Sampling solo en train____________________________________
-    class_counts = torch.bincount(dataset.labels_strat)
-    class_weights = 1.0 / class_counts.float()
+    
+    if split == "train":
 
-    sample_weights = class_weights[dataset.labels_strat]  # Indexacion avanzada de PyTorch
+        #______________Weighted Random Sampling solo en train____________________________________
+        class_counts = torch.bincount(dataset.labels_strat)
+        class_weights = 1.0 / class_counts.float()
 
-    sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True
-    )
+        sample_weights = class_weights[dataset.labels_strat]  # Indexacion avanzada de PyTorch
 
+        sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True
+        )
+        
 
-
-
-   
+    else:
+        sampler = None
+ 
     g = torch.Generator()
     g.manual_seed(config["SEED"])
+    
+   
+
 
     return DataLoader(
         dataset,
         batch_size=config["BATCH_SIZE"],
         num_workers=config.get("NUM_WORKERS", 0),
         sampler= sampler,
+        shuffle=False,
         worker_init_fn=seed_worker,  
         generator=g,          
     )
 
 
 class SingleAtlas(Dataset):
-    def __init__(self, *, cfg: dict, prefix: str = "interp_"):
+    def __init__(self, *, cfg: dict,df_subset: pd.DataFrame, prefix: str = "interp_"):
         self.cfg = cfg
 
         interp_path = Path(cfg["INTERP_PATH"]).resolve()
         if not interp_path.exists():
             raise FileNotFoundError(f"No se encontró: {interp_path}")
 
-        df: pd.DataFrame = pd.read_csv(cfg["CSV_PATH"])
-        df["STRATIFY"] = df['SITE_ID'].astype(str) + '_' + df['DX_GROUP'].astype(str)
+        df: pd.DataFrame = df_subset
+        
 
         print("Cargando SingleAtlas en RAM...")
 

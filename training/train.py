@@ -27,28 +27,35 @@ class Trainer():
                 tepoch.set_description(f"Epoch {epoch+1}")
 
                 train_running_loss = 0.0
+                val_running_loss = 0.0
                 self.model.train()
-                train_running_loss += train_one_epoch(self.model,self.train_loader,self.device, self.optimizer, self.criterion)
+                train_running_loss += train_one_epoch(self.model,self.config,self.train_loader,self.device, self.optimizer, self.criterion)
                 
                 self.model.eval()
-                val_running_loss+= evaluate_one_epoch(self.model,self.val_loader,self.device,self.criterion,self.scheduler)
+                val_running_loss+= evaluate_one_epoch(self.model,self.config,self.val_loader,self.device,self.criterion)
+                self.scheduler.step()        
 
                 avg_train_loss = train_running_loss/len(self.train_loader) #Propositos de logging
                 avg_val_loss = val_running_loss / len(self.val_loader)     #Propositos de logging y early stopping
 
-            tepoch.set_postfix(val_loss=f"{avg_val_loss:.4f}")
+                tepoch.set_postfix(val_loss=f"{avg_val_loss:.4f}")
                 
 
 
 
-def train_one_epoch(model:nn.Module, train_loader:DataLoader, device, optimizer, criterion):
+def train_one_epoch(model:nn.Module,config: dict, train_loader:DataLoader, device, optimizer, criterion):
     
     
     train_running_loss = 0.0
     
     
     for _, (windows,labels) in enumerate(train_loader):
-        inputs = windows.to(device)
+        inputs: torch.tensor = windows.permute(0,2,1).to(device) #   Convertir de (B,NRO_ROIS,T) a (B,T,NRO_ROIS)
+
+        expected_shape = (config["BATCH_SIZE"], config["NRO_ROIS"], config["WINDOWS_SIZE"])
+        if inputs.shape != expected_shape:
+            raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
+
         labels = labels.to(device)
         
         optimizer.zero_grad()
@@ -57,24 +64,29 @@ def train_one_epoch(model:nn.Module, train_loader:DataLoader, device, optimizer,
         loss.backward()
         optimizer.step()
 
-        running_loss += loss.item()
+        train_running_loss += loss.item()
     
 
     return train_running_loss
 
 
-def evaluate_one_epoch(model: nn.Module, val_loader: DataLoader, device, criterion, scheduler):
+def evaluate_one_epoch(model: nn.Module,config: dict, val_loader: DataLoader, device, criterion):
     val_running_loss = 0.0
 
     with torch.no_grad():
         for _, (windows,labels) in enumerate(val_loader):
-            inputs = windows.to(device)
+            inputs = windows.permute(0,2,1).to(device) #   Convertir de (B,NRO_ROIS,T) a (B,T,NRO_ROIS)
+
+            expected_shape = (config["BATCH_SIZE"], config["NRO_ROIS"], config["WINDOWS_SIZE"])
+            if inputs.shape != expected_shape:
+                raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
+            
             labels = labels.to(device)
 
             outputs = model(inputs)
             loss = criterion(outputs,labels)
             val_running_loss+=loss.item()
 
-        scheduler.step()
+
     
     return val_running_loss

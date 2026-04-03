@@ -1,10 +1,13 @@
 import argparse
+from pathlib import Path
 import torch
 import yaml
+import pandas as pd
 from utils.seed import set_seed
 from data.loaders.dataloader import get_dataloader
 from model.models import build_model
-from training.train import Trainer
+from training.cross_validator import CrossValidator
+
 
 def main(args):
 
@@ -18,11 +21,10 @@ def main(args):
     config["DEVICE"] = device
     
     if args.mode == "train":
-        train_loader = get_dataloader(config, split="train")
-        val_loader   = get_dataloader(config, split="val")
-        model        = build_model(config)
-        trainer      = Trainer(model, train_loader, val_loader, config)
-        trainer.fit()
+    
+        df = pd.read_csv(Path(config["CSV_PATH"]).resolve())
+        cv = CrossValidator(config)
+        cv.run(df)
 
     # elif args.mode == "eval":
     #     data  = get_dataloader(config, split="test")

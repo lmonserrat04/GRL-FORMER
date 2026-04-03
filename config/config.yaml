@@ -20,3 +20,6 @@ CLS_DROPOUT : 0.1
 # Hiperparametros entrenamiento
 N_EPOCHS : 500
 N_SPLITS_CV : 5
+LR : 1e-4
+WEIGHT_DECAY : 1e-2
+LABEL_SMOOTHING : 0.1
