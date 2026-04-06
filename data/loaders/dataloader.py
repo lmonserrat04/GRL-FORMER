@@ -17,7 +17,7 @@ def seed_worker(worker_id):
 
 def get_dataloader(config: dict, df_subset: pd.DataFrame, split: str) -> DataLoader:
     required_keys = ["CSV_PATH", "INTERP_PATH", "ATLAS", 
-                 "LABEL_COL", "BATCH_SIZE", "WINDOWS_SIZE", "N_ROIS"]
+                 "LABEL_COL", "BATCH_SIZE", "WINDOW_SIZE", "N_ROIS"]
     for key in required_keys:
         if key not in config:
             raise KeyError(f"Falta la clave requerida en config: '{key}'")
@@ -81,8 +81,9 @@ class SingleAtlas(Dataset):
 
         self.x = []
         for _, row in tqdm(df_subset.iterrows(), total=len(df_subset)):
+           
           
-            filename = f"{prefix}{row[cfg['FILE_ID']]}_rois_{cfg['ATLAS']}.1D"
+            filename = f"{prefix}{row['FILE_ID']}_rois_{cfg['ATLAS']}.1D"
             filepath = interp_path / filename 
             
             self.x.append(
@@ -110,15 +111,15 @@ class SingleAtlas(Dataset):
 
         if self.split == 'train':
 
-            window: torch.Tensor = torch.as_tensor(get_window(x, self.cfg["WINDOWS_SIZE"], mode= 'random')) # Comparte memoria
+            window: torch.Tensor = torch.as_tensor(get_window(x, self.cfg["WINDOW_SIZE"], mode= 'random')) # Comparte memoria
 
         elif self.split == 'val' or self.split == 'test':
-            window: torch.Tensor = torch.as_tensor(get_window(x, self.cfg["WINDOWS_SIZE"], mode= 'central')) # Comparte memoria
+            window: torch.Tensor = torch.as_tensor(get_window(x, self.cfg["WINDOW_SIZE"], mode= 'central')) # Comparte memoria
 
         else:
             raise ValueError("Split no reconocido, se esperaba 'train', 'val' o 'test'")
         
-        if window.shape != (self.cfg["N_ROIS"],self.cfg["WINDOWS_SIZE"]):
+        if window.shape != (self.cfg["N_ROIS"],self.cfg["WINDOW_SIZE"]):
             raise ValueError("Error en shapes al calcular ventana aleatoria en el dataset, se esperaba (N_ROIS, WINDOWS_SIZE)")
 
         return window.T, self.labels[idx] # (T, N_ROIS)

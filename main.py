@@ -7,6 +7,7 @@ from utils.seed import set_seed
 from data.loaders.dataloader import get_dataloader
 from model.models import build_model
 from training.cross_validator import CrossValidator
+from utils.experiment import create_experiment_dir
 
 
 def main(args):
@@ -23,6 +24,7 @@ def main(args):
     if args.mode == "train":
     
         df = pd.read_csv(Path(config["CSV_PATH"]).resolve())
+        config = create_experiment_dir(config)
         cv = CrossValidator(config)
         cv.run(df)
 

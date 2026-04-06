@@ -3,7 +3,7 @@ RUN_NAME: "transformer_baseline"
 
 # ─── Rutas ────────────────────────────────────────────────────────────────────
 RAW_PATH:    "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/cc200"
-INTERP_PATH: "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/cc200_interp"
+INTERP_PATH: "./data/datasets/ABIDE_pcp/cpac/cc200_interp"
 CSV_PATH:    "./data/csv/data_train.csv"
 LOGS_PATH:   "./logs/"
 
