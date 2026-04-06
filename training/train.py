@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from main import config
-
+from callbacks import EarlyStopping
 
 class Trainer():
 
@@ -21,6 +21,7 @@ class Trainer():
         self.scheduler = scheduler
 
     def fit(self):
+        early_stopping = EarlyStopping(self.model, self.config["PATIENCE"],self.config["MIN_DELTA"])
         
         with tqdm(range(self.n_epochs), unit="epoch") as tepoch:
             for epoch in tepoch:
@@ -36,7 +37,13 @@ class Trainer():
                 self.scheduler.step()        
 
                 avg_train_loss = train_running_loss/len(self.train_loader) #Propositos de logging
-                avg_val_loss = val_running_loss / len(self.val_loader)     #Propositos de logging y early stopping
+                avg_val_loss = val_running_loss / len(self.val_loader)    #Propositos de logging y early stopping
+
+                best = early_stopping(self.model,avg_val_loss)
+                if best:
+                    #TODO
+                    break
+
 
                 tepoch.set_postfix(val_loss=f"{avg_val_loss:.4f}")
                 
