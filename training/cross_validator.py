@@ -7,7 +7,7 @@ from data.loaders.dataloader import get_dataloader
 from model.models import build_model
 from training.train import Trainer
 from training.setup import build_optimizer, build_criterion, build_scheduler
-from test import *
+from test.test import test as run_test
 from utils.logger import Logger
 
 
@@ -68,7 +68,7 @@ class CrossValidator:
             best_val_loss = trainer.fit()
             val_losses.append(best_val_loss)
 
-            test(model, fold, accs, vals, self.config, test_loader, criterion)
+            run_test(model, fold, accs, vals, self.config, test_loader, criterion)
 
         
         results = pd.DataFrame(vals, columns=table_cols)

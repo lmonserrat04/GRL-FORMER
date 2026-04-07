@@ -49,7 +49,6 @@ class Trainer():
                 best: nn.Module | None = early_stopping(self.model,avg_val_loss)
                 if best:
                     print(f"Early stopping , Epoca: {epoch + 1}. Mejor loss: {early_stopping.min_val_loss:4f}")
-                    #TODO
                     break
 
 
