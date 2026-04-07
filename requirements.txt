@@ -1,0 +1,6 @@
+nilearn
+numpy
+pandas
+scikit-learn
+tqdm
+pyyaml
