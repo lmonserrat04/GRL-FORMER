@@ -2,17 +2,20 @@
 RUN_NAME: "transformer_baseline"
 
 # ─── Rutas ────────────────────────────────────────────────────────────────────
-RAW_PATH:    "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/cc200"
-INTERP_PATH: "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/cc200_interp"
+RAW_PATH:    "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200"
+INTERP_PATH: "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp"
 CSV_PATH:    "./data/csv/data_train.csv"
 LOGS_PATH:   "./logs/"
 
 # ─── Dataset ──────────────────────────────────────────────────────────────────
 ATLAS:         "cc200"
 N_ROIS:        200
+TR :           2.0
+PREFIX :       "interp_"
 MIN_TIMESTEPS: 116
 WINDOW_SIZE:   128
 LABEL_COL:     "DX_GROUP"
+FACTORS :      ["AGE_AT_SCAN", "SEX", "EYE_STATUS_AT_SCAN"]
 SEED:          42
 
 # ─── DataLoader ───────────────────────────────────────────────────────────────

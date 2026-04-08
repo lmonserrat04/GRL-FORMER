@@ -2,13 +2,15 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from pathlib import Path
-
+import torch
 from data.loaders.dataloader import get_dataloader
+from data.preprocessing.harmonization import ResidualHarmonizer, GlobalNormalizer
 from model.models import build_model
 from training.train import Trainer
 from training.setup import build_optimizer, build_criterion, build_scheduler
 from test.test import test as run_test
 from utils.logger import Logger
+from torch.utils.data import  DataLoader
 
 
 class CrossValidator:
@@ -20,7 +22,9 @@ class CrossValidator:
             random_state=config["SEED"]
         )
 
-    def run(self, df: pd.DataFrame):
+    def run(self):
+        df = pd.read_csv(Path(self.config["CSV_PATH"]).resolve())
+
         vals = []
         accs = []
         val_losses = []
@@ -45,14 +49,22 @@ class CrossValidator:
 
             df_test = df.iloc[test_idx]
 
-            train_loader = get_dataloader(self.config, df_train, split='train')
-            val_loader   = get_dataloader(self.config, df_val,   split='val')
-            test_loader  = get_dataloader(self.config, df_test,  split='test')
+            
+            #Armonizacion y normalizacion
+            harmonizer = ResidualHarmonizer(self.config["FACTORS"])
+            normalizer = GlobalNormalizer()
+
+            train_loader = get_dataloader(self.config, df_train, split='train', normalizer=normalizer, harmonizer=harmonizer)
+            val_loader   = get_dataloader(self.config, df_val,   split='val', normalizer=normalizer, harmonizer=harmonizer)
+            test_loader  = get_dataloader(self.config, df_test,  split='test', normalizer=normalizer, harmonizer=harmonizer)
+            #Duda con los Dataloaders: cuando comienza una nueva epoca saben que tienen que reiniciar y como lo saben?
 
             model     = build_model(self.config)
             optimizer = build_optimizer(model, self.config)
             criterion = build_criterion(self.config)
             scheduler = build_scheduler(optimizer, self.config)
+
+
 
             trainer = Trainer(
                 model=model,
@@ -68,7 +80,10 @@ class CrossValidator:
             best_val_loss = trainer.fit()
             val_losses.append(best_val_loss)
 
-            run_test(model, fold, accs, vals, self.config, test_loader, criterion)
+            run_test(model, fold, accs, vals, self.config, test_loader, criterion) # Pudieras retornar vals y acc en vez de modificar estos
+                                                                                   # objetos mutables inplace
+
+            torch.save(model.state_dict(), Path(self.config["CHECKPOINTS_PATH"]).resolve() / f"best_model_fold{fold+1}.pth")
 
         
         results = pd.DataFrame(vals, columns=table_cols)

@@ -10,7 +10,9 @@ from pathlib import Path
 # │       │   └── test_log_fold1.txt
 # │       ├── checkpoints/
 # │       │   └── best_model_fold1.pt
-# │       └── results.csv
+# │       ├── results.csv
+# |       └── summary.txt
+
 
 def create_experiment_dir(config: dict) -> dict:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

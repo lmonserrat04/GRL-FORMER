@@ -23,10 +23,10 @@ def main(args):
     
     if args.mode == "train":
     
-        df = pd.read_csv(Path(config["CSV_PATH"]).resolve())
+       
         config = create_experiment_dir(config)
         cv = CrossValidator(config)
-        cv.run(df)
+        cv.run()
 
     # elif args.mode == "eval":
     #     data  = get_dataloader(config, split="test")

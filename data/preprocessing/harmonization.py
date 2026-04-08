@@ -12,6 +12,8 @@ class ResidualHarmonizer:
         self.betas = None  # Almacenará los pesos del modelo lineal
 
     def fit(self, X: torch.Tensor, df: pd.DataFrame):
+
+        #X -> (N, T, N_ROIS)
         site_dummies = pd.get_dummies(df[self.site_col_name], drop_first=True)
         confounds = pd.concat([site_dummies, df[self.factors]], axis=1)
         self.confound_cols = confounds.columns
@@ -55,13 +57,13 @@ class GlobalNormalizer:
         self.mean_ = None
         self.std_ = None
 
-    def fit(self, ts_array: np.ndarray):
-        # Calculamos sobre (Sujetos * Tiempos) para cada ROI
-        # ts_array shape: (N, 200, 116)
-        self.mean_ = ts_array.mean(axis=(0, 2), keepdims=True)
-        self.std_ = ts_array.std(axis=(0, 2), keepdims=True)
-        self.std_[self.std_ == 0] = 1
+    def fit(self, X: torch.Tensor):
+        # X shape esperado: (B, T, R)
+        # Calculamos sobre el batch (dim 0) y el tiempo (dim 1), conservando las ROIs
+        self.mean_ = X.mean(dim=(0, 1), keepdim=True)
+        self.std_ = X.std(dim=(0, 1), keepdim=True)
+        self.std_[self.std_ == 0] = 1.0
         return self
 
-    def transform(self, ts_array: np.ndarray):
-        return (ts_array - self.mean_) / self.std_
+    def transform(self, X: torch.Tensor):
+        return (X - self.mean_) / self.std_

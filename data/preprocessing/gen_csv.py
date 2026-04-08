@@ -29,13 +29,11 @@ KEEP_COLUMNS = ['SUB_ID', 'SITE_ID', 'FILE_ID', 'DX_GROUP', 'AGE_AT_SCAN', 'SEX'
 # ─────────────────────────────────────────────
 
 def _build_file_id(row: pd.Series, site_prefix: str) -> str:
-    """Construct a FILE_ID from a row's SUB_ID and its site prefix."""
     sub_id = str(row['SUB_ID']).zfill(7)
     return f"{site_prefix}_{sub_id}"
 
 
 def fix_filenames(*, df: pd.DataFrame) -> pd.DataFrame:
-    """Fill in missing FILE_IDs (where FILE_ID == 'no_filename') for all sites."""
     df = df.copy()
     total_fixed = 0
 
@@ -55,7 +53,6 @@ def fix_filenames(*, df: pd.DataFrame) -> pd.DataFrame:
 
 
 def filter_rows_by_available_files(*, df: pd.DataFrame, raw_fmri_path: Path, atlas: str) -> pd.DataFrame:
-    """Remove rows whose FILE_ID has no matching file on disk."""
     available_ids = {
         f.name.replace(f"_rois_{atlas}.1D", "")
         for f in raw_fmri_path.glob(f"*_rois_{atlas}.1D")
@@ -89,7 +86,6 @@ def filter_rows_by_available_files(*, df: pd.DataFrame, raw_fmri_path: Path, atl
 
 
 def fix_dx_group(*, df: pd.DataFrame) -> pd.DataFrame:
-    """Remap DX_GROUP: 2 (control) → 0, 1 (ASD) stays as 1."""
     df = df.copy()
     df['DX_GROUP'] = df['DX_GROUP'].replace({2: 0})
 
@@ -102,7 +98,6 @@ def fix_dx_group(*, df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_n_timesteps_info(*, df: pd.DataFrame, raw_fmri_path: Path, atlas: str, n_rois: int, column_name: str) -> pd.DataFrame:
-    """Add a column with the number of timesteps (T) for each subject's fMRI file."""
     df = df.copy()
 
     if df.empty:
@@ -122,8 +117,19 @@ def add_n_timesteps_info(*, df: pd.DataFrame, raw_fmri_path: Path, atlas: str, n
     return df
 
 
+def filter_rows_by_min_timesteps(*, df: pd.DataFrame, column_name: str, min_timesteps: int) -> pd.DataFrame:
+    """Remove rows whose number of timesteps is below MIN_TIMESTEPS."""
+    before = len(df)
+    df = df[df[column_name] >= min_timesteps].reset_index(drop=True)
+    removed = before - len(df)
+
+    if removed:
+        print(f"  Removed {removed} subjects with T < {min_timesteps}.")
+    print(f"  Kept {len(df)}/{before} subjects after timestep filtering.")
+    return df
+
+
 def select_columns(*, df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    """Keep only the relevant columns."""
     missing = set(columns) - set(df.columns)
     if missing:
         raise ValueError(f"Missing expected columns: {missing}")
@@ -139,21 +145,24 @@ def run_pipeline(
     raw_fmri_path: Path,
     atlas: str,
     n_rois: int,
+    min_timesteps: int,
     timesteps_column: str,
     *,
-    step_fix_filenames: bool = True,
-    step_filter_rows: bool = True,
-    step_add_timesteps: bool = True,
-    step_fix_dx_group: bool = True,
-    step_select_columns: bool = True,
+    step_fix_filenames:       bool = True,
+    step_filter_rows:         bool = True,
+    step_add_timesteps:       bool = True,
+    step_filter_min_timesteps: bool = True,
+    step_fix_dx_group:        bool = True,
+    step_select_columns:      bool = True,
 ) -> pd.DataFrame:
 
     steps = [
-        (step_fix_filenames,  "Fix missing FILE_IDs",          lambda d: fix_filenames(df=d)),
-        (step_filter_rows,    "Filter rows by available files", lambda d: filter_rows_by_available_files(df=d, raw_fmri_path=raw_fmri_path, atlas=atlas)),
-        (step_add_timesteps,  "Add number of timesteps",       lambda d: add_n_timesteps_info(df=d, raw_fmri_path=raw_fmri_path, atlas=atlas, n_rois=n_rois, column_name=timesteps_column)),
-        (step_fix_dx_group,   "Fix DX_GROUP labels",           lambda d: fix_dx_group(df=d)),
-        (step_select_columns, "Select columns",                lambda d: select_columns(df=d, columns=KEEP_COLUMNS + [timesteps_column])),
+        (step_fix_filenames,        "Fix missing FILE_IDs",              lambda d: fix_filenames(df=d)),
+        (step_filter_rows,          "Filter rows by available files",     lambda d: filter_rows_by_available_files(df=d, raw_fmri_path=raw_fmri_path, atlas=atlas)),
+        (step_add_timesteps,        "Add number of timesteps",            lambda d: add_n_timesteps_info(df=d, raw_fmri_path=raw_fmri_path, atlas=atlas, n_rois=n_rois, column_name=timesteps_column)),
+        (step_filter_min_timesteps, "Filter by minimum timesteps",        lambda d: filter_rows_by_min_timesteps(df=d, column_name=timesteps_column, min_timesteps=min_timesteps)),
+        (step_fix_dx_group,         "Fix DX_GROUP labels",                lambda d: fix_dx_group(df=d)),
+        (step_select_columns,       "Select columns",                     lambda d: select_columns(df=d, columns=KEEP_COLUMNS + [timesteps_column])),
     ]
 
     for enabled, label, step_fn in steps:
@@ -180,17 +189,19 @@ def main(args):
         raw_fmri_path    = raw_fmri_path,
         atlas            = config["ATLAS"],
         n_rois           = config["N_ROIS"],
+        min_timesteps    = config["MIN_TIMESTEPS"],
         timesteps_column = args.timesteps_c_name,
-        step_fix_filenames  = not args.skip_fix_filenames,
-        step_filter_rows    = not args.skip_filter_rows,
-        step_add_timesteps  = not args.skip_add_timesteps,
-        step_fix_dx_group   = not args.skip_fix_dx_group,
-        step_select_columns = not args.skip_select_columns,
+        step_fix_filenames        = not args.skip_fix_filenames,
+        step_filter_rows          = not args.skip_filter_rows,
+        step_add_timesteps        = not args.skip_add_timesteps,
+        step_filter_min_timesteps = not args.skip_filter_min_timesteps,
+        step_fix_dx_group         = not args.skip_fix_dx_group,
+        step_select_columns       = not args.skip_select_columns,
     )
 
     out_path = Path(args.output_csv).resolve()
     df.to_csv(out_path, index=False)
-    print(f"Saved: {out_path}")
+    print(f"\nSaved: {out_path} ({len(df)} subjects)")
 
 
 if __name__ == "__main__":
@@ -202,10 +213,11 @@ if __name__ == "__main__":
     parser.add_argument("--output_csv",       default="./data/csv/data_train.csv")
     parser.add_argument("--timesteps_c_name", default="T")
 
-    parser.add_argument("--skip_fix_filenames",   action="store_true")
-    parser.add_argument("--skip_filter_rows",     action="store_true")
-    parser.add_argument("--skip_add_timesteps",   action="store_true")
-    parser.add_argument("--skip_fix_dx_group",    action="store_true")
-    parser.add_argument("--skip_select_columns",  action="store_true")
+    parser.add_argument("--skip_fix_filenames",        action="store_true")
+    parser.add_argument("--skip_filter_rows",          action="store_true")
+    parser.add_argument("--skip_add_timesteps",        action="store_true")
+    parser.add_argument("--skip_filter_min_timesteps", action="store_true")
+    parser.add_argument("--skip_fix_dx_group",         action="store_true")
+    parser.add_argument("--skip_select_columns",       action="store_true")
 
     main(parser.parse_args())
