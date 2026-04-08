@@ -2,42 +2,44 @@
 RUN_NAME: "transformer_baseline"
 
 # ─── Rutas ────────────────────────────────────────────────────────────────────
-RAW_PATH:    "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200"
+RAW_PATH: "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200"
 INTERP_PATH: "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp"
-CSV_PATH:    "./data/csv/data_train.csv"
-LOGS_PATH:   "./logs/"
-
+CSV_PATH: "./data/csv/data_train.csv"
+LOGS_PATH: "./logs/"
 # ─── Dataset ──────────────────────────────────────────────────────────────────
-ATLAS:         "cc200"
-N_ROIS:        200
-TR :           2.0
-PREFIX :       "interp_"
+ATLAS: "cc200"
+N_ROIS: 200
+TR: 2.0
+PREFIX: "interp_"
 MIN_TIMESTEPS: 116
-WINDOW_SIZE:   128
-LABEL_COL:     "DX_GROUP"
-FACTORS :      ["AGE_AT_SCAN", "SEX", "EYE_STATUS_AT_SCAN"]
-SEED:          42
+WINDOW_SIZE: 128
+LABEL_COL: "DX_GROUP"
+FACTORS:
+  - "AGE_AT_SCAN"
+  - "SEX"
+  - "EYE_STATUS_AT_SCAN"
+SEED: 42
 
 # ─── DataLoader ───────────────────────────────────────────────────────────────
-BATCH_SIZE:   64
-SHUFFLE:      true
-NUM_WORKERS:  8
+BATCH_SIZE: 32
+SHUFFLE: true
+NUM_WORKERS: 4
 
 # ─── Arquitectura (Transformer + MLP) ─────────────────────────────────────────
-D_MODEL:            256
-DIM_FEEDFORWARD:    128
-NUM_ENCODER_LAYERS: 4
-N_HEADS:            4
-ENC_DROP:           0.1
-CLS_DROPOUT:        0.1
+D_MODEL: 128
+DIM_FEEDFORWARD: 256
+NUM_ENCODER_LAYERS: 3
+N_HEADS: 4
+ENC_DROP: 0.3
+CLS_DROPOUT: 0.3
 
 # ─── Entrenamiento ────────────────────────────────────────────────────────────
-N_EPOCHS:       500
-N_SPLITS_CV:    5
-LR:             1e-4
-WEIGHT_DECAY:   1e-2
+N_EPOCHS: 200
+N_SPLITS_CV: 5
+LR: 5e-5
+WEIGHT_DECAY: 0.05
 LABEL_SMOOTHING: 0.1
 
 # ─── Callbacks ────────────────────────────────────────────────────────────────
-PATIENCE:  40
-MIN_DELTA: 0.01
+PATIENCE: 30
+MIN_DELTA: 0.001
