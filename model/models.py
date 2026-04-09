@@ -66,11 +66,13 @@ class Classificator(nn.Module):
         
         self.mlp_layer_1 = nn.Linear(d_model,64)
         self.mlp_layer_2 = nn.Linear(64,2)
+        self.do = nn.Dropout(dropout)
         
 
     def forward(self, x: torch.Tensor):
         x = x.mean(dim = 1)
         x = self.mlp_layer_1(x)
+        x = self.do(x)
         x = F.relu(x)
         x = self.mlp_layer_2(x)
 
