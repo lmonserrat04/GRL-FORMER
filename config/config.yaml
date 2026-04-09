@@ -21,23 +21,22 @@ FACTORS:
 SEED: 42
 
 # ─── DataLoader ───────────────────────────────────────────────────────────────
-BATCH_SIZE: 32
-SHUFFLE: true
-NUM_WORKERS: 4
+BATCH_SIZE: 64
+NUM_WORKERS: 8
 
 # ─── Arquitectura (Transformer + MLP) ─────────────────────────────────────────
-D_MODEL: 128
-DIM_FEEDFORWARD: 256
-NUM_ENCODER_LAYERS: 3
+D_MODEL: 256
+DIM_FEEDFORWARD: 512
+NUM_ENCODER_LAYERS: 2
 N_HEADS: 4
-ENC_DROP: 0.3
-CLS_DROPOUT: 0.3
+ENC_DROP: 0.5
+CLS_DROPOUT: 0.1
 
 # ─── Entrenamiento ────────────────────────────────────────────────────────────
-N_EPOCHS: 200
+N_EPOCHS: 2000
 N_SPLITS_CV: 5
-LR: 5e-5
-WEIGHT_DECAY: 0.05
+LR: 1e-4
+WEIGHT_DECAY: 0.1
 LABEL_SMOOTHING: 0.1
 
 # ─── Callbacks ────────────────────────────────────────────────────────────────

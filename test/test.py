@@ -15,20 +15,19 @@ def test(model,fold, accs: list,vals:list, config:dict, test_loader: DataLoader,
         for _, (windows,labels) in enumerate(test_loader):
             inputs: torch.Tensor = windows.to(config["DEVICE"])
 
-            expected_shape = (config["BATCH_SIZE"], config["WINDOWS_SIZE"], config["NRO_ROIS"])
-            if inputs.shape != expected_shape:
-                raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
+            # expected_shape = (config["BATCH_SIZE"], config["WINDOWS_SIZE"], config["NRO_ROIS"])
+            # if inputs.shape != expected_shape:
+            #     raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
             
             labels = labels.to(config["DEVICE"])
 
             outputs = model(inputs)
             loss = criterion(outputs,labels)
-            val_running_loss+=loss.item()
-            probs = F.softmax(outputs, dim=1).detach().cpu().numpy()
-            y_true.extend(np.argmax(labels.detach().cpu().numpy(), axis=1))
-            y_preds.extend(np.argmax(np.where(probs > 0.5, 1, 0), axis=1))
-            y_probs.extend(probs[:, 1])
-
+            #test_running_loss+=loss.item()
+            probs = F.softmax(outputs, dim=1).detach().cpu().numpy()  # [B, num_classes]
+            y_true.extend(labels.detach().cpu().numpy())               # labels ya son índices
+            y_preds.extend(np.argmax(probs, axis=1))                   # clase con mayor prob
+            y_probs.extend(probs[:, 1])                                # prob de clase positiva
 
 
         acc       = accuracy_score(y_true, y_preds)
@@ -47,8 +46,10 @@ def test(model,fold, accs: list,vals:list, config:dict, test_loader: DataLoader,
         vals.append([fold, acc, precision, recall,
                      f1, auc, ap, fpr, fnr, tpr, tnr])
 
-        print(f"Fold {fold}: Accuracy: {acc}")
+        print(f"Fold {fold}: \nAccuracy: {acc:4f}")
         print(f"Confusion matrix:\n{cm}")
+        print(f"AUC: {auc:4f}")
+        print(f"F1: {f1:4f}")
 
         log_path = Path(config["LOGS_PATH"]).resolve() / f"test_log_fold{fold+1}.txt"
 

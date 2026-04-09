@@ -1,0 +1,17 @@
+services:
+  grl:
+    image: grl
+    container_name: grl
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: '8g'
+    volumes:
+      - /mnt/c/Users/ia_admin/ProyectoNeuro/GRL-FORMER:/app
+    command: bash

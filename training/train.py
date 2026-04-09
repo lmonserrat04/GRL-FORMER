@@ -1,4 +1,4 @@
-from logging import Logger
+from utils.logger import Logger
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -9,18 +9,18 @@ from training.callbacks import EarlyStopping
 
 class Trainer():
 
-    def __init__(self,model:nn.Module , train_loader: DataLoader,val_loader:DataLoader, config: dict, device, optimizer, criterion, scheduler, fold: int):
+    def __init__(self,model:nn.Module , train_loader: DataLoader,val_loader:DataLoader, config: dict, optimizer, criterion, scheduler, fold: int):
         self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.config = config
-        self.device = device
+        self.device = self.config["DEVICE"]
         self.n_epochs = self.config["N_EPOCHS"]
         self.optimizer = optimizer
         self.criterion = criterion
         self.scheduler = scheduler
         log_path = Path(config["LOGS_PATH"]) / f"train_log_fold{fold + 1}.txt"
-        self.logger = Logger(log_path, mode='w')
+        self.logger = Logger(str(log_path))
 
     def fit(self):
         early_stopping = EarlyStopping(self.model, self.config)
@@ -42,7 +42,7 @@ class Trainer():
                 avg_val_loss = val_running_loss / len(self.val_loader)
 
                 cfg = self.config if epoch == 0 else None
-                self.logger.logs("train", epoch, avg_train_loss, avg_val_loss, cfg)
+                self.logger.log_epoch("train", epoch, avg_train_loss, avg_val_loss, cfg)
 
                 best: nn.Module | None = early_stopping(self.model,avg_val_loss)
                 if best:
@@ -50,7 +50,8 @@ class Trainer():
                     break
 
 
-                tepoch.set_postfix(val_loss=f"{avg_val_loss:.4f}")
+                tepoch.set_postfix(v_loss=f"{avg_val_loss:.4f}")
+            
     
         return early_stopping.min_val_loss
 
@@ -65,9 +66,9 @@ def train_one_epoch(model:nn.Module,config: dict, train_loader:DataLoader, devic
     for _, (windows,labels) in enumerate(train_loader):
         inputs: torch.Tensor = windows.to(device)
 
-        expected_shape = (config["BATCH_SIZE"], config["WINDOW_SIZE"], config["N_ROIS"])
-        if inputs.shape != expected_shape:
-            raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
+        # expected_shape = (config["BATCH_SIZE"], config["WINDOW_SIZE"], config["N_ROIS"])
+        # if inputs.shape != expected_shape:
+        #     raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
 
         labels = labels.to(device)
         
@@ -90,9 +91,9 @@ def evaluate_one_epoch(model: nn.Module,config: dict, val_loader: DataLoader, de
         for _, (windows,labels) in enumerate(val_loader):
             inputs: torch.Tensor = windows.to(device)
 
-            expected_shape = (config["BATCH_SIZE"], config["WINDOW_SIZE"], config["N_ROIS"])
-            if inputs.shape != expected_shape:
-                raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
+            # expected_shape = (config["BATCH_SIZE"], config["WINDOW_SIZE"], config["N_ROIS"])
+            # if inputs.shape != expected_shape:
+            #     raise ValueError(f"Error de shapes antes de pasar datos al model, se esperaba {expected_shape}, recibido {inputs.shape} ")
             
             labels = labels.to(device)
 

@@ -5,17 +5,18 @@ import os
 class Logger:
 
     def __init__(self, log_path, mode='w'):
-        self.log_path = log_path
+        self.log_path = str(log_path)
+        os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
 
-        self.logger = logging.getLogger(log_path)
+        self.logger = logging.getLogger(self.log_path)
         self.logger.setLevel(logging.INFO)
 
         if not self.logger.handlers:
-            handler = logging.FileHandler(log_path, mode=mode)
+            handler = logging.FileHandler(self.log_path, mode=mode)
             handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
             self.logger.addHandler(handler)
 
-    def logs(self, about, epoch, train_loss, val_loss, cfg=None):
+    def log_epoch(self, about, epoch, train_loss, val_loss, cfg=None):
         if epoch == 0 and cfg is not None:
             cfg_msg = " | ".join(f"{k}:{v}" for k, v in cfg.items())
             self.logger.info(f"[config] {cfg_msg}")
@@ -24,10 +25,8 @@ class Logger:
         self.logger.info(msg)
 
     def log_test(self, cfg, fold, acc, precision, recall, f1, auc, ap, fpr, fnr, tpr, tnr):
-        # Separador visual inicial
         msg = "\n" + "-"*30 + f" TEST RESULTS FOLD {fold} " + "-"*30 + "\n"
         
-        # Configuración formateada
         for k, v in cfg.items():
             msg += f"{k}: {v}\n"
         
@@ -41,5 +40,8 @@ class Logger:
         
         self.logger.info(msg)
 
-    def log_summary(self,pt_val_loss,t_val_loss ,mean_acc, std_acc):
-        self.logger.info(f"[summary] Mean Acc:{mean_acc:.4f} | Std Acc:{std_acc:.4f} | Pretraining val loss: {pt_val_loss:.4f} | Fine tuning val loss:{t_val_loss:.4f}")
+    def log_summary(self, pt_val_loss, t_val_loss, mean_acc, std_acc):
+        self.logger.info(
+            f"[summary] Mean Acc:{mean_acc:.4f} | Std Acc:{std_acc:.4f} | "
+            f"Pretraining val loss: {pt_val_loss:.4f} | Fine tuning val loss:{t_val_loss:.4f}"
+        )

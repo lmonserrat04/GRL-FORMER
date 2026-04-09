@@ -59,7 +59,7 @@ class CrossValidator:
             test_loader  = get_dataloader(self.config, df_test,  split='test', normalizer=normalizer, harmonizer=harmonizer)
             #Duda con los Dataloaders: cuando comienza una nueva epoca saben que tienen que reiniciar y como lo saben?
 
-            model     = build_model(self.config)
+            model     = build_model(self.config).to(self.config["DEVICE"])
             optimizer = build_optimizer(model, self.config)
             criterion = build_criterion(self.config)
             scheduler = build_scheduler(optimizer, self.config)

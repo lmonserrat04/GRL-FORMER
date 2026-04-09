@@ -108,8 +108,10 @@ def get_window(time_fmri_serie , window_size:int, mode: str):
 
     if mode == 'random':
         offset = np.random.randint(0, max_start + 1)
+        #offset = 0
     elif mode == 'central':
         offset = max_start // 2
+        #offset = 0
     
    
     window = time_fmri_serie[:, offset : offset + window_size]

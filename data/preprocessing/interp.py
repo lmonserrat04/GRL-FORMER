@@ -11,17 +11,21 @@ REQUIRED_COLUMNS = ["FILE_ID", "SITE_ID"]
 
 
 def generate_interp(
-   config: dict,
-   df : pd.DataFrame
-) -> None:
-   
+    config: dict,
+    df: pd.DataFrame
+) -> int:
+
     nro_rois = config["N_ROIS"]
-    raw_path = config["RAW_PATH"]
+    raw_path = Path(config["RAW_PATH"])
     atlas = config["ATLAS"]
     tr_goal = config["TR"]
-    output_path = config["INTERP_PATH"]
+    output_path = Path(config["INTERP_PATH"])
     prefix = config["PREFIX"]
+    min_timesteps = config["MIN_TIMESTEPS"]
 
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    idx = 0
     for idx, row in df.iterrows():
         filename = row.FILE_ID + f"_rois_{atlas}.1D"
 
@@ -32,15 +36,11 @@ def generate_interp(
 
         arr = arr.T.copy()
 
-        
-
-        arr_interp = interpolate_timeseries(arr, row.SITE_ID, tr_goal)
+        arr_interp = interpolate_timeseries(arr, row.SITE_ID, tr_goal, min_timesteps)
         output_filename = prefix + filename
         np.savetxt(output_path / output_filename, arr_interp)
 
     return idx
-        
-    
 
 
 def load_and_validate_df(config: dict) -> pd.DataFrame:
@@ -52,15 +52,14 @@ def load_and_validate_df(config: dict) -> pd.DataFrame:
 
 
 def main(args: argparse.Namespace) -> None:
-    
+
     config_path = args.config
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
     df = load_and_validate_df(config)
 
-    
-    total = generate_interp(df, config)
+    total = generate_interp(config, df)
 
     print(f"Series temporales interpoladas con exito. Total: {total} ")
 
@@ -72,5 +71,3 @@ if __name__ == "__main__":
     parser.add_argument("--config", default="./config/config.yaml")
     args = parser.parse_args()
     main(args)
-   
-    

@@ -1,3 +1,4 @@
+
 import numpy as np
 import pandas as pd
 import torch
@@ -88,39 +89,61 @@ class SingleAtlas(Dataset):
 
         additional_text = ""
         if self.split == 'train':
-            self.labels_strat= torch.tensor(pd.Series(df_subset["STRATIFY"]).astype("category").cat.codes.values)
+            self.labels_strat= torch.tensor(pd.Series(df_subset["STRATIFY"]).astype("category").cat.codes.values, dtype=torch.long)
             additional_text = f"Nro labels estratificacion: {self.labels_strat.numel()}"
 
         # --- SECCIÓN: Limpieza Matricial Vectorizada (Normalización + Harmonización) ---
         if normalizer is not None and harmonizer is not None:
-            print(f"Aplicando Normalización y Residualización masiva ({self.split})...")
-            # 1. Empaquetar: self.x es lista de (R, T). torch.stack da (B, R, T). Permutamos a (B, T, R)
-            X = torch.stack(self.x).permute(0, 2, 1)
+            # Buscamos la T máxima del dataset
+            max_t = max([t.shape[1] for t in self.x])
             
-            # 2. Hardware acceleration: Mover a GPU si existe para lstsq
+            # Creamos un tensor gigante acolchado (B, R, T_max)
+            X_padded = torch.zeros((len(self.x), config['N_ROIS'], max_t))
+            mask = torch.zeros((len(self.x), max_t), dtype=torch.bool) # Para saber qué es relleno
+
+            for i, tensor in enumerate(self.x):
+                curr_t = tensor.shape[1]
+                X_padded[i, :, :curr_t] = tensor
+                mask[i, :curr_t] = True # True en datos reales, False en padding
+
+            # Permutamos a (B, T, R) para los normalizadores
+            X_padded = X_padded.permute(0, 2, 1) 
+            
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            X = X.to(device)
+            X_padded = X_padded.to(device)
+            mask = mask.to(device)
 
-            # 3. Flujo jerárquico estricto (Fit solo en train)
-            if self.split == 'train':
-                normalizer.fit(X)
-                X = normalizer.transform(X)
-                harmonizer.fit(X, df_subset)
-                X = harmonizer.transform(X, df_subset)
+            # 3. Aplicar limpieza pasando la máscara
+            if self.split == 'train':               
+                
+                harmonizer.fit(X_padded, df_subset, mask)
+                X_padded = harmonizer.transform(X_padded, df_subset, mask)
+
+
+                normalizer.fit(X_padded, mask) # Modificamos fit para ignorar ceros
+                X_padded = normalizer.transform(X_padded, mask)
             else:
-                X = normalizer.transform(X)
-                X = harmonizer.transform(X, df_subset)
+                
+                X_padded = harmonizer.transform(X_padded, df_subset, mask)
+                X_padded = normalizer.transform(X_padded, mask)
 
-            # 4. Desempaquetar: Retornar a CPU y a la forma original (B, R, T)
-            X = X.cpu().permute(0, 2, 1)
-            self.x = list(X.unbind(0))  # unbind separa el tensor 3D en una tupla/lista de tensores 2D
+            
+
+
+            # 4. Devolver a las longitudes originales (quitar padding)
+            X_padded = X_padded.cpu().permute(0, 2, 1)
+            new_x = []
+            for i, tensor in enumerate(self.x):
+                curr_t = tensor.shape[1]
+                new_x.append(X_padded[i, :, :curr_t])
+            self.x = new_x
         # -----------------------------------------------------------------------------
 
         print(f"✓ Cargado: {len(self.x)} " +
               f"individuos | Labels dx únicos: {self.labels.unique().tolist() }\n"+
              additional_text)
 
-
+        
     def __len__(self) -> int:
         return len(self.labels)
 

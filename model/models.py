@@ -52,7 +52,7 @@ class EncoderBlock(nn.Module):
         _, T, _ = x.shape
         
         positions = torch.arange(T, device=x.device).unsqueeze(0)  # [1, T]
-        pos_enc = self.pos_enc(positions)                          # [1, T, d_model]
+        pos_enc = self.pos_enc(positions)                           # [1, T, d_model]
         x = self.inp_emb(x) + pos_enc                              # [B, T, d_model]
         x = self.encoder(x, src_key_padding_mask=mask)
         
