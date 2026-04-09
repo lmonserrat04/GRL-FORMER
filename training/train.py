@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
+from setup import compute_loss
 from training.callbacks import EarlyStopping
 
 class Trainer():
@@ -46,6 +46,7 @@ class Trainer():
 
                 best: nn.Module | None = early_stopping(self.model,avg_val_loss)
                 if best:
+                    self.model.load_state_dict(early_stopping.best_model.state_dict())
                     print(f"Early stopping , Epoca: {epoch + 1}. Mejor loss: {early_stopping.min_val_loss:4f}")
                     break
 
@@ -74,7 +75,7 @@ def train_one_epoch(model:nn.Module,config: dict, train_loader:DataLoader, devic
         
         optimizer.zero_grad()
         outputs = model(inputs)
-        loss = criterion(outputs,labels)
+        loss = compute_loss(outputs,labels, criterion, config)
         loss.backward()
         optimizer.step()
 
@@ -98,7 +99,7 @@ def evaluate_one_epoch(model: nn.Module,config: dict, val_loader: DataLoader, de
             labels = labels.to(device)
 
             outputs = model(inputs)
-            loss = criterion(outputs,labels)
+            loss = compute_loss(outputs,labels, criterion, config)
             val_running_loss+=loss.item()
     
     return val_running_loss

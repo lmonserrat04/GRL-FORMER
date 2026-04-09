@@ -3,13 +3,10 @@ import pandas as pd
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from pathlib import Path
 import torch
-from data.loaders.dataloader import get_dataloader
-from data.preprocessing.harmonization import ResidualHarmonizer, GlobalNormalizer
-from model.models import build_model
 from training.train import Trainer
-from training.setup import build_optimizer, build_criterion, build_scheduler
 from test.test import test as run_test
 from utils.logger import Logger
+from setup import build_experiment
 from torch.utils.data import  DataLoader
 
 
@@ -50,19 +47,8 @@ class CrossValidator:
             df_test = df.iloc[test_idx]
 
             
-            #Armonizacion y normalizacion
-            harmonizer = ResidualHarmonizer(self.config["FACTORS"])
-            normalizer = GlobalNormalizer()
-
-            train_loader = get_dataloader(self.config, df_train, split='train', normalizer=normalizer, harmonizer=harmonizer)
-            val_loader   = get_dataloader(self.config, df_val,   split='val', normalizer=normalizer, harmonizer=harmonizer)
-            test_loader  = get_dataloader(self.config, df_test,  split='test', normalizer=normalizer, harmonizer=harmonizer)
-            #Duda con los Dataloaders: cuando comienza una nueva epoca saben que tienen que reiniciar y como lo saben?
-
-            model     = build_model(self.config).to(self.config["DEVICE"])
-            optimizer = build_optimizer(model, self.config)
-            criterion = build_criterion(self.config)
-            scheduler = build_scheduler(optimizer, self.config)
+            model, optimizer, criterion, scheduler, \
+            train_loader, val_loader, test_loader = build_experiment(self.config, df_train, df_val, df_test)
 
 
 
