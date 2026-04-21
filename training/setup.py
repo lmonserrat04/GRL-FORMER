@@ -27,9 +27,6 @@ def compute_loss(outputs, labels, criterion, config):
     return criterion(outputs, labels)
 
 
-
-
-# training/setup.py
 def build_dataloaders(config, df_train, df_val, df_test, harmonizer, normalizer):
     train_loader = get_dataloader(config, df_train, split='train', 
                                   normalizer=normalizer, harmonizer=harmonizer)
