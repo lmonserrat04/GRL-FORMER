@@ -30,4 +30,4 @@ class ReconstructionTask:
         
         loss = self.criterion(pred, targets, mask)
         
-        return loss, pred
+        return loss

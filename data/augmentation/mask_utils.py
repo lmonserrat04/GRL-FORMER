@@ -8,7 +8,7 @@ import torch
 import random
 
 
-def mask_roi_level(timeseries, mask_ratio=0.5):
+def mask_roi_level(timeseries, mask_ratio = None):
     """
     ROI-level masking strategy
     Randomly masks a certain proportion of ROIs, setting the entire column of the time series to zero
@@ -22,6 +22,11 @@ def mask_roi_level(timeseries, mask_ratio=0.5):
         mask: Mask positions, True indicates masked
         target: Original values at the masked positions
     """
+
+    if mask_ratio is None:
+        # Randomly choose masking ratio
+        mask_ratio = 0.25 if random.random() < 0.5 else 0.5
+    
     
     is_batch = timeseries.dim() == 3
     

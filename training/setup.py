@@ -9,11 +9,11 @@ from models.dual_stream import create_dual_stream_model
 from training.tasks.reconstruction import ReconstructionTask
 from training.tasks.contrastive import ContrastiveTask
 
-def build_optimizer(model: nn.Module, config: dict, type: str) -> torch.optim.Optimizer:
+def build_optimizer(params, config: dict) -> torch.optim.Optimizer:
     
 
     return torch.optim.AdamW(
-        model.parameters(),
+        params,
         lr=float(config["LR"]),
         weight_decay=float(config["WEIGHT_DECAY"])
     )
@@ -55,16 +55,21 @@ def build_experiment(config, df_train, df_val, df_test):
     # 1. Dataloaders (comunes o específicos según config)
     train_loader, val_loader, test_loader = build_dataloaders(config, df_train, df_val, df_test)
 
+
     # 2. Selección de Arquitectura y Tarea
+    phase_config = {}
+
     if exp_type == "pretrain_ts":
         model = build_model_ts(config).to(device)
         task = ReconstructionTask(device)
         params = model.parameters()
+        phase_config = config["PT_TST1"]
 
     elif exp_type == "pretrain_fc":
         model = build_model_fc(config).to(device) # Usa create_transformer_fc
         task = ReconstructionTask(device)
         params = model.parameters()
+        phase_config = config["PT_TST2"]
 
     elif exp_type == "contrastive":
         model = create_dual_stream_model(config).to(device)
@@ -87,8 +92,8 @@ def build_experiment(config, df_train, df_val, df_test):
     #     params = model.parameters()
 
     # 3. Componentes de entrenamiento finales
-    optimizer = build_optimizer(params, config)
-    scheduler = build_scheduler(optimizer, config)
+    optimizer = build_optimizer(params, phase_config)
+    scheduler = build_scheduler(optimizer, phase_config)
 
     return {
         "model": model,
@@ -96,5 +101,6 @@ def build_experiment(config, df_train, df_val, df_test):
         "optimizer": optimizer,
         "scheduler": scheduler,
         "train_loader": train_loader,
-        "val_loader": val_loader
+        "val_loader": val_loader,
+        "device": device
     }
