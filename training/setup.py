@@ -66,7 +66,7 @@ def build_experiment(config, df_train, df_val, df_test):
         phase_config = config["PT_TST1"]
 
     elif exp_type == "pretrain_fc":
-        model = build_model_fc(config).to(device) # Usa create_transformer_fc
+        model = build_model_fc(config).to(device) 
         task = ReconstructionTask(device)
         params = model.parameters()
         phase_config = config["PT_TST2"]

@@ -31,14 +31,15 @@ def run_pretrain_ts(config: dict, df_train, df_val, df_test):
             # Train
             train_running_loss+= train_one_epoch(
                 **exp_ts,
-                mask_ratio= None
+                mask_ratio= config["PT_TST1"]["MASK_RATIO"]
 
             )
             model.eval()
             # Validate
             val_running_loss+= validate(
                 **exp_ts,
-                mask_ratio= None)
+                mask_ratio= config["PT_TST1"]["MASK_RATIO"]
+            )
 
             # Update learning rate
             exp_ts['scheduler'].step()

@@ -20,10 +20,6 @@ FACTORS:
   - "EYE_STATUS_AT_SCAN"
 SEED: 42
 MAX_SEQ_LEN : 200
-PCC_DIM : 19900
-# ─── DataLoader ───────────────────────────────────────────────────────────────
-BATCH_SIZE: 64
-NUM_WORKERS: 8
 
 # ─── Arquitectura (Transformer + MLP) ─────────────────────────────────────────
 TST1:
@@ -34,6 +30,7 @@ TST1:
   ENC_DROP: 0.5
   USE_CLS_TOKEN: True
 TST2:
+  PCC_DIM :  19900
   D_MODEL : 256
   N_HEADS : 8
   NUM_ENCODER_LAYERS: 2
@@ -52,11 +49,21 @@ FUSION:
 # ─── Preentrenamiento  ────────────────────────────────────────────────────────────
 PT_TST1:
   N_EPOCHS: 100
+  BATCH_SIZE : 32
   LR: 1e-4
   WEIGHT_DECAY: 1e-4
   MASK_RATIO: None
   T_MAX : 100
   ETA_MIN : 1e-6
+
+PT_TST2:
+  N_EPOCHS : 100
+  BATCH_SIZE : 32
+  LR : 1e-4
+  WEIGHT_DECAY: 1e-4
+  MASK_RATIO: 0.15
+
+
 
 
 # ─── Callbacks ────────────────────────────────────────────────────────────────

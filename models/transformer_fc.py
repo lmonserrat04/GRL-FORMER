@@ -8,7 +8,7 @@ def build_model_fc(config: dict):
     model_cfg = config["TST2"] 
     
     return TST2(
-        pcc_dim            = config["PCC_DIM"],           
+        pcc_dim            = model_cfg["PCC_DIM"],           
         d_model            = model_cfg["D_MODEL"],
         dim_feedforward    = model_cfg["DIM_FEEDFORWARD"],
         num_encoder_layers = model_cfg["NUM_ENCODER_LAYERS"],
