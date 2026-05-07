@@ -178,71 +178,8 @@ class PretrainingDecoder(nn.Module):
 
     def forward(self,x: torch.Tensor):
         return self.pretrain_decoder(x)
-        
-    
-class TransformerFCForPretrain(nn.Module):
-    """
-    Wrapper class for TST2 pre-training. Includes masking logic and loss calculation.
-    Clase envoltorio para el pre-entrenamiento de TST2. Incluye lógica de máscara y pérdida.
-    """
-    
-    def __init__(self, transformer_fc):
-        super().__init__()
-        self.transformer = transformer_fc
-    
-    def forward(self, x, masked_x, mask):
-        """
-        Args:
-            x: Original PCC vector (batch, pcc_dim) / Vector PCC original
-            masked_x: Masked PCC vector (batch, pcc_dim) / Vector PCC enmascarado
-            mask: Mask positions (batch, pcc_dim) / Posiciones de la máscara
-        
-        Returns:
-            loss: Reconstruction loss / Pérdida de reconstrucción
-            pred: Predicted PCC vector / Vector PCC predicho
-        """
-        # Forward pass / Pase hacia adelante
-        pred = self.transformer(masked_x, mode='pretrain')
-        
-        # Compute MSE loss on masked positions
-        # Calcula la pérdida MSE en las posiciones enmascaradas
-        loss = nn.functional.mse_loss(
-            pred[mask], x[mask], reduction='mean'
-        )
-        
-        return loss, pred
     
     
-    
-
-
-        
-class MaskedMSELoss(nn.Module):
-    """
-    Masked MSE Loss: Calculates reconstruction loss only for masked positions.
-    Pérdida MSE enmascarada: Calcula la pérdida de reconstrucción solo para posiciones enmascaradas.
-    """
-    
-    def __init__(self, reduction='mean'):
-        super().__init__()
-        self.reduction = reduction
-        self.mse_loss = nn.MSELoss(reduction=self.reduction)
-    
-    def forward(self, y_pred, y_true, mask):
-        """
-        Args:
-            y_pred: Predicted values / Valores predichos
-            y_true: True values / Valores reales
-            mask: Boolean mask, True = masked position / Máscara booleana, True = posición enmascarada
-        
-        Returns:
-            loss: MSE loss for masked positions / Pérdida MSE para posiciones enmascaradas
-        """
-        masked_pred = torch.masked_select(y_pred, mask)
-        masked_true = torch.masked_select(y_true, mask)
-        
-        return self.mse_loss(masked_pred, masked_true)
-
 
 if __name__ == "__main__":
     import torch
@@ -284,37 +221,22 @@ if __name__ == "__main__":
     assert out_finetune.shape == (B, config["TST2"]["D_MODEL"]), "❌ finetune shape incorrecto"
     print("✓ finetune OK")
 
-    # ── 3. TransformerTSForPretrain (máscara + loss) ───────────────────────
-    pretrain_model = TransformerFCForPretrain(model)
-
-    criterion = MaskedMSELoss()
+    # ── 3. (máscara + loss) ───────────────────────
+   
 
     mask = torch.rand(4, 19900) > 0.85
     masked_x = x.clone()
     masked_x[mask] = 0.0
 
-    pretrain_model.eval()
+    model.eval()
     with torch.no_grad():
-        _, pred = pretrain_model.forward(x, masked_x, mask)
+        pred = model.forward(masked_x)
 
-    target = torch.randn(4, 19900)
-
-    loss = criterion(pred, target, mask)
-    print(f"[wrapper]   loss_masked_mse:  {loss.item():.6f}")
     print(f"[wrapper]   pred:  {tuple(pred.shape)}")
     assert pred.shape == (B, PCC), "❌ wrapper pred shape incorrecto"
     
     print("✓ TransformerFCForPretrain OK")
 
-    # ── 4. Paso de entrenamiento mínimo ───────────────────────────────────
-    pretrain_model.train()
-    optimizer = torch.optim.AdamW(pretrain_model.parameters(), lr=1e-4)
-    optimizer.zero_grad()
-    loss_train, _ = pretrain_model.forward(x, masked_x, mask)
-    loss_train.backward()
-    optimizer.step()
-    print(f"[train]     loss tras 1 step: {loss_train.item():.6f}")
-    print("✓ backward + optimizer OK")
 
     print("\n✅ Todos los tests pasaron.")
             

@@ -3,9 +3,15 @@ import torch.nn as nn
 
 from data.loaders.dataloader import get_dataloader
 from data.preprocessing.harmonization import GlobalNormalizer, ResidualHarmonizer
-from model.models import build_model
+from models.transformer_ts import build_model_ts
+from models.transformer_fc import build_model_fc
+from models.dual_stream import create_dual_stream_model
+from training.tasks.reconstruction import ReconstructionTask
+from training.tasks.contrastive import ContrastiveTask
 
-def build_optimizer(model: nn.Module, config: dict) -> torch.optim.Optimizer:
+def build_optimizer(model: nn.Module, config: dict, type: str) -> torch.optim.Optimizer:
+    
+
     return torch.optim.AdamW(
         model.parameters(),
         lr=float(config["LR"]),
@@ -13,6 +19,7 @@ def build_optimizer(model: nn.Module, config: dict) -> torch.optim.Optimizer:
     )
 
 def build_scheduler(optimizer: torch.optim.Optimizer, config: dict) -> torch.optim.lr_scheduler._LRScheduler:
+
     return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
         T_0=int(config.get("T_0", 10))
@@ -36,16 +43,58 @@ def build_dataloaders(config, df_train, df_val, df_test, harmonizer, normalizer)
                                   normalizer=normalizer, harmonizer=harmonizer)
     return train_loader, val_loader, test_loader
 
+
+
 def build_experiment(config, df_train, df_val, df_test):
-    harmonizer = ResidualHarmonizer(config["FACTORS"])
-    normalizer = GlobalNormalizer()
-    
-    train_loader, val_loader, test_loader = build_dataloaders(
-        config, df_train, df_val, df_test, harmonizer, normalizer
-    )
-    model     = build_model(config).to(config["DEVICE"])
-    optimizer = build_optimizer(model, config)
-    criterion = build_criterion(config)
+    """
+    Instancia solo los componentes necesarios según el tipo de experimento.
+    """
+    device = config["DEVICE"]
+    exp_type = config["EXPERIMENT_TYPE"] # Ej: 'pretrain_ts', 'pretrain_fc', 'contrastive', 'finetune'
+
+    # 1. Dataloaders (comunes o específicos según config)
+    train_loader, val_loader, test_loader = build_dataloaders(config, df_train, df_val, df_test)
+
+    # 2. Selección de Arquitectura y Tarea
+    if exp_type == "pretrain_ts":
+        model = build_model_ts(config).to(device)
+        task = ReconstructionTask(device)
+        params = model.parameters()
+
+    elif exp_type == "pretrain_fc":
+        model = build_model_fc(config).to(device) # Usa create_transformer_fc
+        task = ReconstructionTask(device)
+        params = model.parameters()
+
+    elif exp_type == "contrastive":
+        model = create_dual_stream_model(config).to(device)
+        # La ContrastiveTask requiere dimensiones de los dos modelos
+        task = ContrastiveTask(
+            dim_ts=config["DIM_TS"], 
+            dim_fc=config["DIM_FC"],
+            device=device
+        )
+        # El optimizador necesita parámetros del modelo Y de los Projection Heads[cite: 3]
+        params = [
+            {'params': model.parameters()},
+            {'params': task.contrastive_module.parameters()}
+        ]
+
+    # elif exp_type == "finetune":
+    #     model = create_dual_stream_model(config).to(device)
+    #     # Aquí cargarías pesos pre-entrenados si es necesario
+    #     task = ClassificationTask(device) # Una tarea nueva para etiquetas médicas
+    #     params = model.parameters()
+
+    # 3. Componentes de entrenamiento finales
+    optimizer = build_optimizer(params, config)
     scheduler = build_scheduler(optimizer, config)
-    
-    return model, optimizer, criterion, scheduler, train_loader, val_loader, test_loader
+
+    return {
+        "model": model,
+        "task": task,
+        "optimizer": optimizer,
+        "scheduler": scheduler,
+        "train_loader": train_loader,
+        "val_loader": val_loader
+    }

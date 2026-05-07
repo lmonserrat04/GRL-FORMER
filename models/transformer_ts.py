@@ -218,38 +218,7 @@ class PretrainingDecoder(nn.Module):
     def forward(self,x: torch.Tensor):
         return self.pretrain_decoder(x)
         
-    
-class TransformerTSForPretrain(nn.Module):
-    """
-    Wrapper class for TST1 pre-training
-    Includes masking logic and loss calculation
-    """
-    
-    def __init__(self, transformer_ts):
-        super().__init__()
-        self.transformer = transformer_ts
-    
-    def forward(self, x, masked_x, mask):
-        """
-        Args:
-            x: Original time series (batch, T, n_rois)
-            masked_x: Masked time series (batch, T, n_rois)
-            mask: Mask locations (batch, T, n_rois)
-        
-        Returns:
-            loss: Reconstruction loss
-            pred: Predicted time series
-        """
-        # Forward pass
-        pred = self.transformer(masked_x, mode='pretrain')
-        
-        # Calculate MSE loss for masked positions
-        loss = nn.functional.mse_loss(
-            pred[mask], x[mask], reduction='mean'
-        )
-        
-        return loss, pred
-         
+ 
 
 if __name__ == "__main__":
     import torch
@@ -288,26 +257,16 @@ if __name__ == "__main__":
     assert out_finetune.shape == (B, config["TST1"]["D_MODEL"]), "❌ finetune shape incorrecto"
     print("✓ finetune OK")
 
-    pretrain_model = TransformerTSForPretrain(model)
+    
     mask = torch.rand(B, T, R) > 0.85
     masked_x = x.clone()
     masked_x[mask] = 0.0
 
-    pretrain_model.eval()
+    model.eval()
     with torch.no_grad():
-        loss, pred = pretrain_model.forward(x, masked_x, mask)
-    print(f"[wrapper]   loss:  {loss.item():.6f}")
+        pred = model.forward(masked_x)
     print(f"[wrapper]   pred:  {tuple(pred.shape)}")
     assert pred.shape == (B, T, R), "❌ wrapper pred shape incorrecto"
     print("✓ TransformerTSForPretrain OK")
-
-    pretrain_model.train()
-    optimizer = torch.optim.AdamW(pretrain_model.parameters(), lr=1e-4)
-    optimizer.zero_grad()
-    loss_train, _ = pretrain_model.forward(x, masked_x, mask)
-    loss_train.backward()
-    optimizer.step()
-    print(f"[train]     loss tras 1 step: {loss_train.item():.6f}")
-    print("✓ backward + optimizer OK")
 
     print("\n✅ Todos los tests pasaron.")
