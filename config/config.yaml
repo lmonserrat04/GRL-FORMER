@@ -23,11 +23,11 @@ MAX_SEQ_LEN : 200
 
 # ─── Arquitectura (Transformer + MLP) ─────────────────────────────────────────
 TST1:
-  D_MODEL: 256
-  DIM_FEEDFORWARD: 512
-  NUM_ENCODER_LAYERS: 2
-  N_HEADS: 4
-  ENC_DROP: 0.5
+  D_MODEL: 512
+  DIM_FEEDFORWARD: 2048
+  NUM_ENCODER_LAYERS: 6
+  N_HEADS: 8
+  ENC_DROP: 0.1
   USE_CLS_TOKEN: True
 TST2:
   PCC_DIM :  19900
@@ -63,9 +63,17 @@ PT_TST2:
   WEIGHT_DECAY: 1e-4
   MASK_RATIO: 0.15
 
+#──── Train Contrastive ────────────────────────────────────────────────────────────────────
+T_CONTRASTIVE:
+  N_EPOCHS : 50
+  BATCH_SIZE : 32
+  LR: 1e-4
+  WEIGHT_DECAY: 1e-4
+  TEMPERATURE: 0.07
+  PROJ_HIDDEN_DIM : 256
 
 
 
-# ─── Callbacks ────────────────────────────────────────────────────────────────
+# ─── Callbacks ────────────────────────────────────────────────────────────────────
 PATIENCE: 30
 MIN_DELTA: 0.001

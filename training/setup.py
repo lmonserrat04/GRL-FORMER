@@ -84,6 +84,7 @@ def build_experiment(config, df_train, df_val, df_test):
             {'params': model.parameters()},
             {'params': task.contrastive_module.parameters()}
         ]
+        phase_config = config["T_CONTRASTIVE"]
 
     # elif exp_type == "finetune":
     #     model = create_dual_stream_model(config).to(device)
