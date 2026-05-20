@@ -136,37 +136,13 @@ class DualStreamModel(nn.Module):
     def load_pretrained_tst2(self, checkpoint_path, strict=False):
         """Cargar pesos pre-entrenados de TST2"""
         self.transformer_fc.load_pretrained(checkpoint_path, strict=strict)
-    
-    def freeze_encoders(self):
-        """Congelar ambos codificadores Transformer"""
-        for param in self.transformer_ts.parameters():
-            param.requires_grad = False
-        for param in self.transformer_fc.parameters():
-            param.requires_grad = False
-    
-    def unfreeze_encoders(self):
-        """Descongelar ambos codificadores Transformer"""
-        for param in self.transformer_ts.parameters():
-            param.requires_grad = True
-        for param in self.transformer_fc.parameters():
-            param.requires_grad = True
 
 
-
-def create_dual_stream_model(
-    config: dict
-):
-    """
-    Función de conveniencia para crear el modelo de doble flujo
-    
-    Arg
-        config : diccionario de configuracion global
-    Returns:
-        model: Instancia de DualStreamModel
-    """
-    return DualStreamModel(
-        config
-    )
+def create_dual_stream_model(config, name_chkpt_pt_ts: str, name_chkpt_pt_fc: str):
+    dual_stream = DualStreamModel(config)
+    dual_stream.load_pretrained_tst1(name_chkpt_pt_ts)  
+    dual_stream.load_pretrained_tst2(name_chkpt_pt_fc)  
+    return dual_stream
 
 
 if __name__ == '__main__':

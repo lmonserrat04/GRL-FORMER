@@ -71,8 +71,13 @@ T_CONTRASTIVE:
   WEIGHT_DECAY: 1e-4
   TEMPERATURE: 0.07
   PROJ_HIDDEN_DIM : 256
+  PROJ_OUTPUT_DIM : 128
 
-
+CHECKPOINTS:
+  PT_TS:    "best_pt_ts_model"
+  PT_FC:    "best_pt_fc_model"
+  CONT:     "best_cont_model"
+  FINETUNE: "best_finetuned_model"
 
 # ─── Callbacks ────────────────────────────────────────────────────────────────────
 PATIENCE: 30

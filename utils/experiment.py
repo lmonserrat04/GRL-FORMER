@@ -6,10 +6,15 @@ from pathlib import Path
 # │   └── {timestamp}_{run_name}/        # ej: 20260406_143022_transformer_baseline
 # │       ├── config.yaml                # copia exacta del config usado
 # │       ├── logs/
-# │       │   ├── train_log_fold1.txt
-# │       │   └── test_log_fold1.txt
+# │       │   ├── pt_fc_log_fold1.txt
+# │       │   ├── pt_ts_log_fold1.txt
+# │       │   ├── pt_contrastive_log_fold1.txt
+# │       │   └── finetune_log_fold1.txt
 # │       ├── checkpoints/
-# │       │   └── best_model_fold1.pt
+# │       │   ├── best_pt_fc_model_fold_1.pt
+# │       │   ├── best_pt_ts_model_fold_1.pt
+# │       │   ├── best_contrastive_model_fold_1.pt
+# │       │   └── best_finetuned_model_fold_1.pt
 # │       ├── results.csv
 # |       └── summary.txt
 

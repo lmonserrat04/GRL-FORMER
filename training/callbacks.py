@@ -1,8 +1,6 @@
 import copy
 from pathlib import Path
 
-import torch
-
 class EarlyStopping():
     def __init__(self, model,config:dict):
         self.best_model = copy.deepcopy(model)
@@ -23,10 +21,7 @@ class EarlyStopping():
         else:
             
             self.counter += 1
-            if self.counter >= self.patience: 
-
-                checkpoint_path = Path(self.config["CHECKPOINTS_PATH"]) / f"best_model.pt"
-                torch.save(model.state_dict(), checkpoint_path)        
+            if self.counter >= self.patience:     
                 return self.best_model                
 
         return None  

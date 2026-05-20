@@ -7,7 +7,7 @@ from models.transformer_ts import build_model_ts
 from models.transformer_fc import build_model_fc
 from models.dual_stream import create_dual_stream_model
 from training.tasks.reconstruction import ReconstructionTask
-from training.tasks.contrastive import ContrastiveTask
+from training.tasks.contrastive import ContrastiveTask, ContrastiveWrapper
 
 def build_optimizer(params, config: dict) -> torch.optim.Optimizer:
     
@@ -45,7 +45,10 @@ def build_dataloaders(config, df_train, df_val, df_test, harmonizer, normalizer)
 
 
 
-def build_experiment(config, df_train, df_val, df_test):
+def build_experiment(config, df_train, df_val, df_test,
+                     chkpt_ts=None,    # pretrain TS  → contrastive
+                     chkpt_fc=None,    # pretrain FC  → contrastive
+                     chkpt_cont=None):
     """
     Instancia solo los componentes necesarios según el tipo de experimento.
     """
@@ -60,25 +63,36 @@ def build_experiment(config, df_train, df_val, df_test):
     phase_config = {}
 
     if exp_type == "pretrain_ts":
+        
         model = build_model_ts(config).to(device)
         task = ReconstructionTask(device)
         params = model.parameters()
         phase_config = config["PT_TST1"]
+       
 
     elif exp_type == "pretrain_fc":
-        model = build_model_fc(config).to(device) 
+        model = build_model_fc(config).to(device)
         task = ReconstructionTask(device)
         params = model.parameters()
         phase_config = config["PT_TST2"]
 
     elif exp_type == "contrastive":
-        model = create_dual_stream_model(config).to(device)
-        # La ContrastiveTask requiere dimensiones de los dos modelos
+        model = create_dual_stream_model(
+            config,
+            name_chkpt_pt_ts=chkpt_ts,   # llega como parámetro de build_experiment
+            name_chkpt_pt_fc=chkpt_fc,   # llega como parámetro de build_experiment
+        ).to(device)
+
+
         task = ContrastiveTask(
-            dim_ts=config["DIM_TS"], 
-            dim_fc=config["DIM_FC"],
+            dim_ts=model.dim_ts,            # ya expuesto en DualStreamModel
+            dim_fc=model.dim_fc,
+            proj_hidden_dim=config["T_CONTRASTIVE"]["PROJ_HIDDEN_DIM"],
+            proj_output_dim=config["T_CONTRASTIVE"]["PROJ_OUTPUT_DIM"],
+            temperature=config["T_CONTRASTIVE"]["TEMPERATURE"],
             device=device
-        )
+)
+
         # El optimizador necesita parámetros del modelo Y de los Projection Heads[cite: 3]
         params = [
             {'params': model.parameters()},
@@ -88,9 +102,11 @@ def build_experiment(config, df_train, df_val, df_test):
 
     # elif exp_type == "finetune":
     #     model = create_dual_stream_model(config).to(device)
-    #     # Aquí cargarías pesos pre-entrenados si es necesario
-    #     task = ClassificationTask(device) # Una tarea nueva para etiquetas médicas
+    #     if chkpt_cont:
+    #         model.load_state_dict(torch.load(chkpt_cont))
+    #     task = ClassificationTask(device)
     #     params = model.parameters()
+    #     phase_config = config["FINETUNE"]
 
     # 3. Componentes de entrenamiento finales
     optimizer = build_optimizer(params, phase_config)

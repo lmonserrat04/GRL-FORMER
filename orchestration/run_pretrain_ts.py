@@ -1,11 +1,15 @@
+from pathlib import Path
 from tqdm import tqdm
 from training.setup import build_experiment
 from pretraining.pretrain_ts import train_one_epoch, validate
 from training.callbacks import EarlyStopping
 import torch.nn as nn
 
+from utils.checkpoint import get_checkpoint_path
 
-def run_pretrain_ts(config: dict, df_train, df_val, df_test):
+
+def run_pretrain_ts(config: dict, df_train, df_val, df_test, fold):
+    print("Funcion run_pretrain_ts llamada")
     config["EXPERIMENT_TYPE"] = "pretrain_ts"
     exp_ts = build_experiment(config, df_train, df_val, df_test) # diccionario que devuelve : "model", "task", "optimizer"
                                                                     # "scheduler", "train_loader","val_loader", "device"
@@ -54,18 +58,18 @@ def run_pretrain_ts(config: dict, df_train, df_val, df_test):
             best: nn.Module | None = early_stopping(model,avg_val_loss)
 
             if best:
-                    model.load_state_dict(early_stopping.best_model.state_dict())
-                    print(f"Early stopping pretraining timeseries, Epoca: {epoch + 1}. Mejor loss: {early_stopping.min_val_loss:4f}")
-                    break
+                model.load_state_dict(early_stopping.best_model.state_dict())
+                print(f"Early stopping pretraining timeseries, Epoca: {epoch + 1}. Mejor loss: {early_stopping.min_val_loss:4f}")
+                break
 
 
             tepoch.set_postfix(v_loss=f"{avg_val_loss:.4f}")
-            
-            
-            
-            
+
             print(f"Train Loss: {train_running_loss:.4f}, Val Loss: {val_running_loss:.4f}")
             # print(f"LR: {current_lr:.6f}"
+
+        save_path = get_checkpoint_path(config, "PT_TS", fold)
+        torch.save(model.state_dict(), save_path)
 
 
 # main_test_pretrain_ts.py

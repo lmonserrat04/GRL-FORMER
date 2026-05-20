@@ -1,11 +1,15 @@
+from pathlib import Path
 from tqdm import tqdm
 from training.setup import build_experiment
 from pretraining.pretrain_fc import train_one_epoch, validate
 from training.callbacks import EarlyStopping
 import torch.nn as nn
 
+from utils.checkpoint import get_checkpoint_path
+from utils.experiment import create_experiment_dir
 
-def run_pretrain_fc(config: dict, df_train, df_val, df_test):
+
+def run_pretrain_fc(config: dict, df_train, df_val, df_test, fold):
     config["EXPERIMENT_TYPE"] = "pretrain_fc"
     exp_ts = build_experiment(config, df_train, df_val, df_test) # diccionario que devuelve : "model", "task", "optimizer"
                                                                     # "scheduler", "train_loader","val_loader", "device"
@@ -67,6 +71,10 @@ def run_pretrain_fc(config: dict, df_train, df_val, df_test):
             print(f"Train Loss: {train_running_loss:.4f}, Val Loss: {val_running_loss:.4f}")
             # print(f"LR: {current_lr:.6f}"
 
+        save_path = get_checkpoint_path(config, "PT_FC", fold)
+        torch.save(model.state_dict(), save_path)   
+
+        
 # main_test_pretrain_fc.py
 
 import torch
@@ -200,6 +208,7 @@ if __name__ == "__main__":
     print(f"  pcc_dim  : {PCC_DIM}")
     print("=" * 60)
 
-    run_pretrain_fc(config, df_train, df_val, df_test)
+    config = create_experiment_dir(config)
+    run_pretrain_fc(config, df_train, df_val, df_test,0)
 
     print("\n✓  Smoke-test finished without errors.")
