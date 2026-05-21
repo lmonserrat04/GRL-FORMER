@@ -4,12 +4,10 @@ from training.setup import build_experiment
 from pretraining.pretrain_ts import train_one_epoch, validate
 from training.callbacks import EarlyStopping
 import torch.nn as nn
-
 from utils.checkpoint import get_checkpoint_path
 
 
 def run_pretrain_ts(config: dict, df_train, df_val, df_test, fold):
-    print("Funcion run_pretrain_ts llamada")
     config["EXPERIMENT_TYPE"] = "pretrain_ts"
     exp_ts = build_experiment(config, df_train, df_val, df_test) # diccionario que devuelve : "model", "task", "optimizer"
                                                                     # "scheduler", "train_loader","val_loader", "device"
@@ -189,6 +187,6 @@ if __name__ == "__main__":
     print(f"  batch  : {config['BATCH_SIZE']}")
     print("=" * 60)
 
-    run_pretrain_ts(config, df_train, df_val, df_test)
+    run_pretrain_ts(config, df_train, df_val, df_test, fold = 0)
 
     print("\n✓  Smoke-test finished without errors.")

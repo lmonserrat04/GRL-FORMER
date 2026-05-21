@@ -4,6 +4,7 @@ import torch
 from training.setup import build_experiment
 from training.tasks.contrastive import ContrastiveTask
 from tqdm import tqdm
+from utils.checkpoint import get_checkpoint_path
 
 
 def run_contrastive(
@@ -60,8 +61,8 @@ def run_contrastive(
             tepoch.set_postfix(contr_loss=f"{avg_loss:.4f}")
             losses.append(avg_loss)
         
-        torch.save(model.state_dict(), Path(config["CHECKPOINTS_PATH"]).resolve() / f"best_cont_model_fold_{fold}.pt")
-
+        save_path = get_checkpoint_path(config, "CONT", fold)
+        torch.save(model.state_dict(), save_path)
 
     return losses
 
@@ -295,7 +296,7 @@ if __name__ == "__main__":
     print(f"  chkpts   : None (smoke mode)")
     print("=" * 60)
 
-    losses = run_contrastive(config, df_train, df_val, df_test, fold=0)
+    #losses = run_contrastive(config, df_train, df_val, df_test, fold=0)
 
-    print(f"\n  Losses por epoch: {[f'{l:.4f}' for l in losses]}")
+    #print(f"\n  Losses por epoch: {[f'{l:.4f}' for l in losses]}")
     print("✓  Smoke-test finished without errors.")

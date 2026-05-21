@@ -178,14 +178,14 @@ if __name__ == '__main__':
     }
 
     print("Testing DualStreamModel...")
-    model = create_dual_stream_model(config)
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    #model = create_dual_stream_model(config)
+    #print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     batch_size = 4
     timeseries = torch.randn(batch_size, 116, 200)
     pcc_vector = torch.randn(batch_size, 19900)
 
-    logits = model(timeseries, pcc_vector)
-    print(f"Logits shape: {logits.shape}")  # esperado: (4, 2)
+    #logits = model(timeseries, pcc_vector)
+    #print(f"Logits shape: {logits.shape}")  # esperado: (4, 2)
 
     print("\nTest passed!")

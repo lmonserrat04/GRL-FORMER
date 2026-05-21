@@ -1,25 +1,6 @@
 from orchestration import run_contrastive, run_pretrain_fc, run_pretrain_ts
 from utils.checkpoint import get_checkpoint_path
 
-def run_cross_validation(config, df, n_folds=5):
-    config = run_contrastive.create_experiment_dir(config)
-
-    for fold in range(n_folds):
-        df_train, df_val, df_test = split_fold(df, fold)
-
-        run_pretrain_ts(config, df_train, df_val, df_test, fold)
-        run_pretrain_fc(config, df_train, df_val, df_test, fold)
-
-        run_contrastive(
-            config, df_train, df_val, df_test, fold,
-            chkpt_ts=get_checkpoint_path(config, "PT_TS", fold),
-            chkpt_fc=get_checkpoint_path(config, "PT_FC", fold),
-        )
-
-        # run_finetune(
-        #     config, df_train, df_val, df_test, fold,
-        #     chkpt_cont=get_checkpoint_path(config, "CONT", fold),
-        # )
 
 
 # main_test_cross_validation.py
@@ -181,9 +162,9 @@ def _patched_build_dataloaders(config, df_train, df_val, df_test,
     bs       = get_batch_size(config)
     factory  = LOADER_FACTORY[exp_type]
     return (
-        factory(N_SAMPLES,      bs),
-        factory(N_SAMPLES // 2, bs),
-        factory(N_SAMPLES // 4, bs),
+        factory(N_SAMPLES,      bs), #Train loader
+        factory(N_SAMPLES // 2, bs), #Val loader
+        factory(N_SAMPLES // 4, bs), #Test loader
     )
 
 setup_module.build_dataloaders = _patched_build_dataloaders
