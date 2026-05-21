@@ -6,6 +6,7 @@ from data.preprocessing.harmonization import GlobalNormalizer, ResidualHarmonize
 from models.transformer_ts import build_model_ts
 from models.transformer_fc import build_model_fc
 from models.dual_stream import create_dual_stream_model
+from training.tasks.classification import ClassificationTask
 from training.tasks.reconstruction import ReconstructionTask
 from training.tasks.contrastive import ContrastiveTask, ContrastiveWrapper
 
@@ -100,13 +101,16 @@ def build_experiment(config, df_train, df_val, df_test,
         ]
         phase_config = config["T_CONTRASTIVE"]
 
-    # elif exp_type == "finetune":
-    #     model = create_dual_stream_model(config).to(device)
-    #     if chkpt_cont:
-    #         model.load_state_dict(torch.load(chkpt_cont))
-    #     task = ClassificationTask(device)
-    #     params = model.parameters()
-    #     phase_config = config["FINETUNE"]
+
+    elif exp_type == "finetune":
+        model = create_dual_stream_model(config,
+                                         name_chkpt_cont=chkpt_cont,
+                                        ).to(device)
+        if chkpt_cont:
+            model.load_state_dict(torch.load(chkpt_cont))
+        task = ClassificationTask(device)
+        params = model.parameters()
+        phase_config = config["FINETUNING"]
 
     # 3. Componentes de entrenamiento finales
     optimizer = build_optimizer(params, phase_config)

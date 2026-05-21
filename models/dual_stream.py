@@ -68,18 +68,16 @@ class DualStreamModel(nn.Module):
         
         
     
-    def forward(self, timeseries, pcc_vector, return_features=False, return_attention=False):
+    def forward(self, timeseries, pcc_vector):
         """
         Args:
             timeseries: Serie temporal (batch, T, n_rois)
             pcc_vector: Vector PCC (batch, pcc_dim)
-            return_features: Si devuelve características intermedias
-            return_attention: Si devuelve pesos de atención
+           
         
         Returns:
             logits: Logits de clasificación (batch, num_classes)
-            features (opcional): Características fusionadas (batch, fusion_dim)
-            attention_weights (opcional): Diccionario de pesos de atención
+           
         """
         # Obtener características de TST1
         h_ts = self.transformer_ts(timeseries, mode='finetune')
@@ -88,25 +86,13 @@ class DualStreamModel(nn.Module):
         h_fc = self.transformer_fc(pcc_vector, mode='finetune')
         
         # Fusión
-        if return_attention and hasattr(self.fusion, 'forward'):
-            # Verificar si la fusión admite devolver atención
-            if 'return_attention' in self.fusion.forward.__code__.co_varnames:
-                fused, attention_weights = self.fusion(h_ts, h_fc, return_attention=True)
-            else:
-                fused = self.fusion(h_ts, h_fc)
-                attention_weights = None
-        else:
-            fused = self.fusion(h_ts, h_fc)
-            attention_weights = None
         
+        fused = self.fusion(h_ts, h_fc)
+         
         # Clasificación
         logits = self.classifier(fused)
         
         result = [logits]
-        if return_features:
-            result.extend([fused, h_ts, h_fc])
-        if return_attention and attention_weights is not None:
-            result.append(attention_weights)
         
         if len(result) == 1:
             return result[0]
@@ -137,11 +123,26 @@ class DualStreamModel(nn.Module):
         """Cargar pesos pre-entrenados de TST2"""
         self.transformer_fc.load_pretrained(checkpoint_path, strict=strict)
 
+    def load_pretrained_contrastive(self, checkpoint_path, strict=False):
+        """Cargar pesos pre-entrenados de Contrastive"""
+        self.transformer_fc.load_pretrained(checkpoint_path, strict=strict)
 
-def create_dual_stream_model(config, name_chkpt_pt_ts: str, name_chkpt_pt_fc: str):
+
+
+def create_dual_stream_model(config, name_chkpt_pt_ts: str | None = None, name_chkpt_pt_fc: str | None = None, 
+                             name_chkpt_cont: str | None = None):
     dual_stream = DualStreamModel(config)
-    dual_stream.load_pretrained_tst1(name_chkpt_pt_ts)  
-    dual_stream.load_pretrained_tst2(name_chkpt_pt_fc)  
+    
+    if name_chkpt_pt_fc and name_chkpt_pt_ts:
+        dual_stream.load_pretrained_tst1(name_chkpt_pt_ts)  
+        dual_stream.load_pretrained_tst2(name_chkpt_pt_fc)  
+    elif name_chkpt_cont:
+        dual_stream.load_pretrained_contrastive(name_chkpt_cont)
+    else:
+        raise ValueError("Missing some checkpoint names to load weights for dual stream model")
+
+    
+
     return dual_stream
 
 

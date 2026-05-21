@@ -16,7 +16,7 @@ def run_contrastive(
     config["EXPERIMENT_TYPE"] = "contrastive"
     task : ContrastiveTask
 
-    exp = build_experiment(config, df_train, df_val, df_test, chkpt_ts, chkpt_fc)
+    exp = build_experiment(config, df_train, df_val, df_test, chkpt_ts = chkpt_ts, chkpt_fc = chkpt_ts)
     model       = exp["model"]
     task: ContrastiveTask    = exp["task"]
     optimizer   = exp["optimizer"]

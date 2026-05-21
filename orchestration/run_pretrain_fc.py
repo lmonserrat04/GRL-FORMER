@@ -6,7 +6,7 @@ from training.callbacks import EarlyStopping
 import torch.nn as nn
 
 from utils.checkpoint import get_checkpoint_path
-from utils.experiment import create_experiment_dir
+
 
 
 def run_pretrain_fc(config: dict, df_train, df_val, df_test, fold):
@@ -59,7 +59,7 @@ def run_pretrain_fc(config: dict, df_train, df_val, df_test, fold):
 
             if best:
                     model.load_state_dict(early_stopping.best_model.state_dict())
-                    print(f"Early stopping pretraining timeseries, Epoca: {epoch + 1}. Mejor loss: {early_stopping.min_val_loss:4f}")
+                    print(f"Early stopping pretraining pcc, Epoca: {epoch + 1}. Mejor loss: {early_stopping.min_val_loss:4f}")
                     break
 
 
@@ -81,6 +81,7 @@ import torch
 import pandas as pd
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
+from utils.experiment import create_experiment_dir
 
 # ── 1. Config ──────────────────────────────────────────────────────────────────
 config = {
