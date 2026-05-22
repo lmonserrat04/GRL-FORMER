@@ -1,49 +1,33 @@
+# main.py
 import argparse
 from pathlib import Path
 import torch
 import yaml
-import pandas as pd
 from utils.seed import set_seed
-from data.loaders.dataloader import get_dataloader
-from model.models import build_model
-from training.cross_validator import CrossValidator
-from utils.experiment import create_experiment_dir
-
+from training.cross_validator_template import run_cross_validation
 
 def main(args):
-
-    config_path = args.config
-    with open(config_path, "r") as f:
+    with open(args.config, "r", encoding = 'utf-8') as f:
         config = yaml.safe_load(f)
 
-    set_seed(config['SEED'])
+   
+    
+    config.setdefault("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
+    set_seed(config["SEED"])
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    config["DEVICE"] = device
-    
     if args.mode == "train":
-    
-       
-        config = create_experiment_dir(config)
-        cv = CrossValidator(config)
-        cv.run()
+        print(f"Starting cross-validation with config: {args.config}")
+        # Parámetros opcionales (pueden ir en el YAML o pasarse aquí)
+        n_folds = config.get("N_FOLDS", 3)
+        n_samples = config.get("N_SAMPLES_SYNTH", 32)
+        run_cross_validation(config, n_folds=n_folds, n_samples=n_samples)
 
     # elif args.mode == "eval":
-    #     data  = get_dataloader(config, split="test")
-    #     model = build_model(config)
-    #     model.load_state_dict(torch.load(config.checkpoint))
-    #     evaluate(model, data, config)
-
-    # elif args.mode == "infer":
-    #     model = build_model(config)
-    #     model.load_state_dict(torch.load(config.checkpoint))
-    #     run_inference(model, config)  # lee inputs de otra fuente
-
-
+    #     ... (tu código futuro)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["train", "eval", "infer"])
+    parser.add_argument("--mode", choices=["train", "eval", "infer"], default="train")
     parser.add_argument("--config", default="./config/config.yaml")
     args = parser.parse_args()
     main(args)

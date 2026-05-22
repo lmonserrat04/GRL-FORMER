@@ -1,12 +1,13 @@
-# ─── Identificación del experimento ───────────────────────────────────────────
+# --- Identificacion del experimento ---
 RUN_NAME: "transformer_baseline"
 
-# ─── Rutas ────────────────────────────────────────────────────────────────────
+# --- Rutas ---
 RAW_PATH: "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200"
 INTERP_PATH: "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp"
 CSV_PATH: "./data/csv/data_train.csv"
 LOGS_PATH: "./logs/"
-# ─── Dataset ──────────────────────────────────────────────────────────────────
+
+# --- Dataset ---
 ATLAS: "cc200"
 N_ROIS: 200
 TR: 2.0
@@ -18,10 +19,15 @@ FACTORS:
   - "AGE_AT_SCAN"
   - "SEX"
   - "EYE_STATUS_AT_SCAN"
-SEED: 42
-MAX_SEQ_LEN : 200
+MAX_SEQ_LEN: 200
 
-# ─── Arquitectura (Transformer + MLP) ─────────────────────────────────────────────
+# --- Seed ---
+SEED: 42
+
+# --- Cross Validation ---
+N_FOLDS: 1
+
+# --- Arquitectura (Transformer + MLP) ---
 TST1:
   D_MODEL: 512
   DIM_FEEDFORWARD: 2048
@@ -29,67 +35,67 @@ TST1:
   N_HEADS: 8
   ENC_DROP: 0.1
   USE_CLS_TOKEN: True
+
 TST2:
-  PCC_DIM :  19900
-  D_MODEL : 256
-  N_HEADS : 8
+  PCC_DIM: 19900
+  D_MODEL: 256
+  N_HEADS: 8
   NUM_ENCODER_LAYERS: 2
   DIM_FEEDFORWARD: 512
   ENC_DROP: 0.1
 
 DUAL_STREAM:
-  FUSION_TYPE: 'attention_pooling'
-  NUM_CLASSES : 2
-  CLASSIFIER_DROPOUT : 0.1
-  MLP_DIMS : [256,64,2]
+  FUSION_TYPE: "attention_pooling"
+  NUM_CLASSES: 2
+  CLASSIFIER_DROPOUT: 0.1
+  MLP_DIMS: [256, 64, 2]
+
 FUSION:
   ATTENTION_POOLING:
-    HIDDEN_DIM : 512
+    HIDDEN_DIM: 512
 
-
-# ─── Preentrenamiento  ──────────────────────────────────────────────────────────────────
+# --- Preentrenamiento ---
 PT_TST1:
   N_EPOCHS: 100
-  BATCH_SIZE : 32
+  BATCH_SIZE: 32
   LR: 1e-4
   WEIGHT_DECAY: 1e-4
-  MASK_RATIO: None
-  T_MAX : 100
-  ETA_MIN : 1e-6
+  MASK_RATIO: null        # usa null en lugar de None
+  T_MAX: 100
+  ETA_MIN: 1e-6
 
 PT_TST2:
-  N_EPOCHS : 100
-  BATCH_SIZE : 32
-  LR : 1e-4
+  N_EPOCHS: 100
+  BATCH_SIZE: 32
+  LR: 1e-4
   WEIGHT_DECAY: 1e-4
   MASK_RATIO: 0.15
 
-#──── Train Contrastive ──────────────────────────────────────────────────────────────────────
+# --- Contrastive ---
 T_CONTRASTIVE:
-  N_EPOCHS : 50
-  BATCH_SIZE : 32
+  N_EPOCHS: 50
+  BATCH_SIZE: 32
   LR: 1e-4
   WEIGHT_DECAY: 1e-4
   TEMPERATURE: 0.07
-  PROJ_HIDDEN_DIM : 256
-  PROJ_OUTPUT_DIM : 128
+  PROJ_HIDDEN_DIM: 256
+  PROJ_OUTPUT_DIM: 128
 
-#──── Finetuning  ──────────────────────────────────────────────────────────────────────────────
+# --- Finetuning ---
 FINETUNING:
-  N_EPOCHS : 100
-  BATCH_SIZE : 32
+  N_EPOCHS: 100
+  BATCH_SIZE: 32
   PATIENCE: 20
   LR: 5e-5
   WEIGHT_DECAY: 1e-4
- 
 
-#──── Checkpoints prefixes ────────────────────────────────────────────────────────────────────
+# --- Checkpoints ---
 CHECKPOINTS:
-  PT_TS:    "best_pt_ts_model"
-  PT_FC:    "best_pt_fc_model"
-  CONT:     "best_cont_model"
+  PT_TS: "best_pt_ts_model"
+  PT_FC: "best_pt_fc_model"
+  CONT: "best_cont_model"
   FINETUNE: "best_finetuned_model"
 
-# ─── Callbacks ────────────────────────────────────────────────────────────────────────────────
+# --- Callbacks ---
 PATIENCE: 30
 MIN_DELTA: 0.001

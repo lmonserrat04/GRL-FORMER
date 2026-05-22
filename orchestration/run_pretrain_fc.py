@@ -70,8 +70,7 @@ def run_pretrain_fc(config: dict, df_train, df_val, df_test, fold):
             # print(f"LR: {current_lr:.6f}"
 
         save_path = get_checkpoint_path(config, "PT_FC", fold)
-        torch.save(model.state_dict(), save_path)   
-
+        torch.save(model.state_dict(), save_path)
         
 # main_test_pretrain_fc.py
 

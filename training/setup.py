@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+from torch.optim.lr_scheduler import LRScheduler   # al inicio del archivo
 from data.loaders.dataloader import get_dataloader
 from data.preprocessing.harmonization import GlobalNormalizer, ResidualHarmonizer
 from models.transformer_ts import build_model_ts
@@ -19,12 +19,12 @@ def build_optimizer(params, config: dict) -> torch.optim.Optimizer:
         weight_decay=float(config["WEIGHT_DECAY"])
     )
 
-def build_scheduler(optimizer: torch.optim.Optimizer, config: dict) -> torch.optim.lr_scheduler._LRScheduler:
-
+def build_scheduler(optimizer: torch.optim.Optimizer, config: dict) -> LRScheduler:
     return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
         T_0=int(config.get("T_0", 10))
     )
+
 
 def build_criterion(config: dict) -> nn.Module:
     return nn.CrossEntropyLoss(
@@ -112,9 +112,14 @@ def build_experiment(config, df_train, df_val, df_test,
         params = model.parameters()
         phase_config = config["FINETUNING"]
 
+    else:
+        raise ValueError(f"Unknown EXPERIMENT_TYPE: {exp_type}")
+
     # 3. Componentes de entrenamiento finales
     optimizer = build_optimizer(params, phase_config)
     scheduler = build_scheduler(optimizer, phase_config)
+
+    
 
     return {
         "model": model,
