@@ -60,9 +60,14 @@ PT_TST1:
   BATCH_SIZE: 32
   LR: 1e-4
   WEIGHT_DECAY: 1e-4
-  MASK_RATIO: null        # usa null en lugar de None
+  MASK_RATIO: null
   T_MAX: 100
   ETA_MIN: 1e-6
+  OPTIMIZER: "AdamW"
+  SCHEDULER: "CosineAnnealingLR"
+  SCHEDULER_PARAMS:
+    T_max: 100        # normalmente igual a N_EPOCHS
+    eta_min: 1e-6
 
 PT_TST2:
   N_EPOCHS: 100
@@ -70,6 +75,11 @@ PT_TST2:
   LR: 1e-4
   WEIGHT_DECAY: 1e-4
   MASK_RATIO: 0.15
+  OPTIMIZER: "AdamW"
+  SCHEDULER: "CosineAnnealingLR"
+  SCHEDULER_PARAMS:
+    T_max: 100        # normalmente igual a N_EPOCHS
+    eta_min: 1e-6
 
 # --- Contrastive ---
 T_CONTRASTIVE:
@@ -80,14 +90,19 @@ T_CONTRASTIVE:
   TEMPERATURE: 0.07
   PROJ_HIDDEN_DIM: 256
   PROJ_OUTPUT_DIM: 128
+  OPTIMIZER: "Adam"
 
 # --- Finetuning ---
 FINETUNING:
   N_EPOCHS: 100
   BATCH_SIZE: 32
-  PATIENCE: 20
   LR: 5e-5
   WEIGHT_DECAY: 1e-4
+  OPTIMIZER: "AdamW"
+  SCHEDULER: "CosineAnnealingLR"
+  SCHEDULER_PARAMS:
+    T_max: 100
+    eta_min: 5e-7
 
 # --- Checkpoints ---
 CHECKPOINTS:

@@ -1,29 +1,74 @@
 import torch
 import torch.nn as nn
-from torch.optim.lr_scheduler import LRScheduler   # al inicio del archivo
 from data.loaders.dataloader import get_dataloader
-from data.preprocessing.harmonization import GlobalNormalizer, ResidualHarmonizer
 from models.transformer_ts import build_model_ts
 from models.transformer_fc import build_model_fc
 from models.dual_stream import create_dual_stream_model
 from training.tasks.classification import ClassificationTask
 from training.tasks.reconstruction import ReconstructionTask
-from training.tasks.contrastive import ContrastiveTask, ContrastiveWrapper
+from training.tasks.contrastive import ContrastiveTask
+
+import torch.optim as optim
+
+# Registry: nombre → clase de optimizador
+OPTIMIZER_REGISTRY = {
+    "Adam":   optim.Adam,
+    "AdamW":  optim.AdamW,
+}
 
 def build_optimizer(params, config: dict) -> torch.optim.Optimizer:
+    """
+    params : iterable de parámetros o lista de dicts (grupos)
+    config : diccionario de fase (ej. config["PT_TST1"] o config["T_CONTRASTIVE"])
+             Debe contener "OPTIMIZER" (opcional, por defecto "AdamW"),
+             "LR", y opcionalmente "WEIGHT_DECAY", "MOMENTUM", etc.
+    """
+    optimizer_name = config.get("OPTIMIZER", "AdamW")
+    optimizer_cls = OPTIMIZER_REGISTRY.get(optimizer_name)
+    if optimizer_cls is None:
+        raise ValueError(f"Optimizador '{optimizer_name}' no soportado. "
+                         f"Disponibles: {list(OPTIMIZER_REGISTRY.keys())}")
+
+    # Preparamos los kwargs genéricos
+    kwargs = {"lr": float(config["LR"])}
+    if "WEIGHT_DECAY" in config:
+        kwargs["weight_decay"] = float(config["WEIGHT_DECAY"])
     
+    # Si en el futuro necesitas betas, eps... añádelos aquí
 
-    return torch.optim.AdamW(
-        params,
-        lr=float(config["LR"]),
-        weight_decay=float(config["WEIGHT_DECAY"])
-    )
+    return optimizer_cls(params, **kwargs) # **kwargs -> Keyword Arguments 
 
-def build_scheduler(optimizer: torch.optim.Optimizer, config: dict) -> LRScheduler:
-    return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer,
-        T_0=int(config.get("T_0", 10))
-    )
+
+import torch.optim.lr_scheduler as lr_scheduler
+
+# Registry: nombre → clase de scheduler
+SCHEDULER_REGISTRY = {
+    "CosineAnnealingLR":          lr_scheduler.CosineAnnealingLR,
+    "CosineAnnealingWarmRestarts": lr_scheduler.CosineAnnealingWarmRestarts,
+    "StepLR":                     lr_scheduler.StepLR,
+    "ExponentialLR":              lr_scheduler.ExponentialLR,
+    "ReduceLROnPlateau":          lr_scheduler.ReduceLROnPlateau,  # requiere métrica aparte
+}
+
+def build_scheduler(optimizer: torch.optim.Optimizer, config: dict) -> torch.optim.lr_scheduler.LRScheduler:
+    """
+    Construye el scheduler según la clave 'SCHEDULER' y 'SCHEDULER_PARAMS'.
+    Si no se especifica, por defecto CosineAnnealingWarmRestarts con T_0 = T_0 de config, o 10.
+    """
+    scheduler_name = config.get("SCHEDULER", "CosineAnnealingWarmRestarts")
+    scheduler_cls = SCHEDULER_REGISTRY.get(scheduler_name)
+    if scheduler_cls is None:
+        raise ValueError(f"Scheduler '{scheduler_name}' no soportado. "
+                         f"Disponibles: {list(SCHEDULER_REGISTRY.keys())}")
+
+    # Parámetros específicos del scheduler (todos opcionales, el scheduler usará sus defaults)
+    scheduler_params = config.get("SCHEDULER_PARAMS", {})
+
+    # Retrocompatibilidad: si no hay SCHEDULER_PARAMS y no se definió SCHEDULER, usar T_0 antiguo
+    if not scheduler_params and scheduler_name == "CosineAnnealingWarmRestarts":
+        scheduler_params = {"T_0": int(config.get("T_0", 10))}
+
+    return scheduler_cls(optimizer, **scheduler_params)
 
 
 def build_criterion(config: dict) -> nn.Module:

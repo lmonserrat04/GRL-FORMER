@@ -257,30 +257,100 @@ def run_cross_validation(config, n_folds=3, n_samples=32):
 if __name__ == "__main__":
     # Configuración de ejemplo para pruebas autónomas
     config = {
-        "DEVICE": "cuda" if torch.cuda.is_available() else "cpu",
-        "RUN_NAME": "smoke_test_cv",
-        "N_ROIS": 200,
-        "MAX_SEQ_LEN": 100,
-        "WINDOW_SIZE": 128,
-        "NUM_WORKERS": 0,
-        "SEED": 42,
-        "CHECKPOINTS": {
-            "PT_TS":    "best_pt_ts_model",
-            "PT_FC":    "best_pt_fc_model",
-            "CONT":     "best_cont_model",
-            "FINETUNE": "best_finetuned_model",
-        },
-        "TST1": {"D_MODEL": 64, "DIM_FEEDFORWARD": 128, "NUM_ENCODER_LAYERS": 2, "N_HEADS": 4, "ENC_DROP": 0.1, "USE_CLS_TOKEN": True},
-        "TST2": {"D_MODEL": 64, "N_HEADS": 4, "NUM_ENCODER_LAYERS": 2, "DIM_FEEDFORWARD": 128, "ENC_DROP": 0.1, "PCC_DIM": 19900},
-        "DUAL_STREAM": {"FUSION_TYPE": "attention_pooling", "NUM_CLASSES": 2, "CLASSIFIER_DROPOUT": 0.1},
-        "FUSION": {"ATTENTION_POOLING": {"HIDDEN_DIM": 128}},
-        "PT_TST1": {"N_EPOCHS": 2, "BATCH_SIZE": 8, "LR": 1e-4, "WEIGHT_DECAY": 1e-4, "MASK_RATIO": None, "T_MAX": 2, "ETA_MIN": 1e-6},
-        "PT_TST2": {"N_EPOCHS": 2, "BATCH_SIZE": 8, "LR": 1e-4, "WEIGHT_DECAY": 1e-4, "MASK_RATIO": 0.15},
-        "T_CONTRASTIVE": {"N_EPOCHS": 2, "BATCH_SIZE": 8, "LR": 1e-4, "WEIGHT_DECAY": 1e-4, "TEMPERATURE": 0.07, "PROJ_HIDDEN_DIM": 64, "PROJ_OUTPUT_DIM": 32},
-        "FINETUNING": {"N_EPOCHS": 2, "BATCH_SIZE": 8, "LR": 5e-5, "WEIGHT_DECAY": 1e-4},
-        "PATIENCE": 5, "MIN_DELTA": 0.001, "ATLAS": "cc200", "LABEL_COL": "DX_GROUP",
-        "FACTORS": ["AGE_AT_SCAN", "SEX", "EYE_STATUS_AT_SCAN"], "TR": 2.0, "PREFIX": "interp_", "MIN_TIMESTEPS": 116,
-    }
+    "DEVICE": "cuda" if torch.cuda.is_available() else "cpu",
+    "RUN_NAME": "smoke_test_cv",
+    "N_ROIS": 200,
+    "MAX_SEQ_LEN": 100,
+    "WINDOW_SIZE": 128,
+    "NUM_WORKERS": 0,
+    "SEED": 42,
+
+    "CHECKPOINTS": {
+        "PT_TS":    "best_pt_ts_model",
+        "PT_FC":    "best_pt_fc_model",
+        "CONT":     "best_cont_model",
+        "FINETUNE": "best_finetuned_model",
+    },
+
+    "TST1": {
+        "D_MODEL": 64, "DIM_FEEDFORWARD": 128, "NUM_ENCODER_LAYERS": 2,
+        "N_HEADS": 4, "ENC_DROP": 0.1, "USE_CLS_TOKEN": True
+    },
+    "TST2": {
+        "D_MODEL": 64, "N_HEADS": 4, "NUM_ENCODER_LAYERS": 2,
+        "DIM_FEEDFORWARD": 128, "ENC_DROP": 0.1, "PCC_DIM": 19900
+    },
+    "DUAL_STREAM": {
+        "FUSION_TYPE": "attention_pooling", "NUM_CLASSES": 2,
+        "CLASSIFIER_DROPOUT": 0.1
+    },
+    "FUSION": {
+        "ATTENTION_POOLING": {"HIDDEN_DIM": 128}
+    },
+
+    # --- Fases con optimizador + scheduler nuevos ---
+    "PT_TST1": {
+        "N_EPOCHS": 2,
+        "BATCH_SIZE": 8,
+        "LR": 1e-4,
+        "WEIGHT_DECAY": 1e-4,
+        "MASK_RATIO": None,
+        "OPTIMIZER": "AdamW",
+        "SCHEDULER": "CosineAnnealingLR",
+        "SCHEDULER_PARAMS": {
+            "T_max": 2,
+            "eta_min": 1e-6          # LR * 0.01 = 1e-4 * 0.01 = 1e-6
+        }
+    },
+
+    "PT_TST2": {
+        "N_EPOCHS": 2,
+        "BATCH_SIZE": 8,
+        "LR": 1e-4,
+        "WEIGHT_DECAY": 1e-4,
+        "MASK_RATIO": 0.15,
+        "OPTIMIZER": "AdamW",
+        "SCHEDULER": "CosineAnnealingLR",
+        "SCHEDULER_PARAMS": {
+            "T_max": 2,
+            "eta_min": 1e-6
+        }
+    },
+
+    "T_CONTRASTIVE": {
+        "N_EPOCHS": 2,
+        "BATCH_SIZE": 8,
+        "LR": 1e-4,
+        "WEIGHT_DECAY": 1e-4,
+        "TEMPERATURE": 0.07,
+        "PROJ_HIDDEN_DIM": 64,
+        "PROJ_OUTPUT_DIM": 32,
+        "OPTIMIZER": "Adam",
+    },
+
+    "FINETUNING": {
+        "N_EPOCHS": 2,
+        "BATCH_SIZE": 8,
+        "LR": 5e-5,
+        "WEIGHT_DECAY": 1e-4,
+        "OPTIMIZER": "AdamW",
+        "SCHEDULER": "CosineAnnealingLR",
+        "SCHEDULER_PARAMS": {
+            "T_max": 2,
+            "eta_min": 5e-7          # 5e-5 * 0.01 = 5e-7
+        }
+    },
+
+    "PATIENCE": 5,
+    "MIN_DELTA": 0.001,
+    "ATLAS": "cc200",
+    "LABEL_COL": "DX_GROUP",
+    "FACTORS": ["AGE_AT_SCAN", "SEX", "EYE_STATUS_AT_SCAN"],
+    "TR": 2.0,
+    "PREFIX": "interp_",
+    "MIN_TIMESTEPS": 116,
+}
+   
     print("Smoke-test: run_cross_validation with finetune + test")
     print(f"  device  : {config['DEVICE']}")
     run_cross_validation(config, n_folds=3)
