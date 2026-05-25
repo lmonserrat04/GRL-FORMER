@@ -1,6 +1,6 @@
 from tqdm import tqdm
 from training.setup import build_experiment
-from pretraining.pretrain_fc import train_one_epoch, validate
+from training.train_pretrain_fc import train_one_epoch, validate
 from training.callbacks import EarlyStopping
 import torch.nn as nn
 from utils.checkpoint import get_checkpoint_path
