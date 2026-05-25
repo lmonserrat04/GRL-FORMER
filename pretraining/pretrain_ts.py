@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 
+from training.context import ExperimentContext
 from training.tasks.reconstruction import ReconstructionTask
 
 # Add project root to path
@@ -47,9 +48,13 @@ class PretrainTSDataset(torch.utils.data.Dataset):
         return torch.tensor(ts, dtype=torch.float32)
 
 
-def train_one_epoch(model,task: ReconstructionTask , optimizer,scheduler,train_loader, val_loader,device, mask_ratio=None):
-    """Train one epoch"""
-    
+def train_one_epoch(ctx: ExperimentContext, mask_ratio = None):
+    model = ctx.model
+    task : ReconstructionTask = ctx.task 
+    optimizer = ctx.optimizer
+    train_loader = ctx.train_loader
+    device = ctx.device
+ 
     total_loss = 0.0
 
    
@@ -76,9 +81,12 @@ def train_one_epoch(model,task: ReconstructionTask , optimizer,scheduler,train_l
     return total_loss
 
 
-def validate(model,task: ReconstructionTask , optimizer,scheduler,train_loader, val_loader, device, mask_ratio=None):
-    """Validation"""
-    
+def validate(ctx: ExperimentContext, mask_ratio = None):
+    model = ctx.model
+    task: ReconstructionTask = ctx.task
+    val_loader = ctx.val_loader
+    device = ctx.device
+
     total_loss = 0.0
     
     with torch.no_grad():

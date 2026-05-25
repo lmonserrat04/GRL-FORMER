@@ -7,7 +7,7 @@ from models.dual_stream import create_dual_stream_model
 from training.tasks.classification import ClassificationTask
 from training.tasks.reconstruction import ReconstructionTask
 from training.tasks.contrastive import ContrastiveTask
-
+from training.context import ExperimentContext
 import torch.optim as optim
 
 # Registry: nombre → clase de optimizador
@@ -157,12 +157,12 @@ def build_experiment(config, df_train, df_val, df_test,
 
     
 
-    return {
-        "model": model,
-        "task": task,
-        "optimizer": optimizer,
-        "scheduler": scheduler,
-        "train_loader": train_loader,
-        "val_loader": val_loader,
-        "device": device
-    }
+    return ExperimentContext(
+        model=model,
+        task=task,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device
+    )

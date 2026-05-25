@@ -233,12 +233,12 @@ def run_cross_validation(config, n_folds=3, n_samples=32):
         run_finetuning(config, df_train, df_val, df_test, fold,
                        chkpt_cont=chkpt_cont)
 
-        # 5. Test (descomentar cuando esté listo)
+        # 5. Test
         print(f"\n── Fase 5: evaluación (fold {fold}) ──")
         config["EXPERIMENT_TYPE"] = "finetune"
         chkpt_finetune = get_checkpoint_path(config, "FINETUNE", fold)
         exp_finetune = setup_module.build_experiment(config, df_train, df_val, df_test, chkpt_cont=chkpt_finetune)
-        model = exp_finetune["model"]
+        model = exp_finetune.model
         _, _, test_loader = setup_module.build_dataloaders(config, df_train, df_val, df_test,
                                               harmonizer=None, normalizer=None)
         criterion = nn.CrossEntropyLoss()

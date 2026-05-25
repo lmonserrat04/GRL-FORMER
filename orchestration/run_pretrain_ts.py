@@ -4,16 +4,16 @@ from pretraining.pretrain_ts import train_one_epoch, validate
 from training.callbacks import EarlyStopping
 import torch.nn as nn
 from utils.checkpoint import get_checkpoint_path
-
+from training.context import ExperimentContext
 
 def run_pretrain_ts(config: dict, df_train, df_val, df_test, fold):
     config["EXPERIMENT_TYPE"] = "pretrain_ts"
-    exp_ts = build_experiment(config, df_train, df_val, df_test) # diccionario que devuelve : "model", "task", "optimizer"
-                                                                    # "scheduler", "train_loader","val_loader", "device"
+    exp = build_experiment(config, df_train, df_val, df_test)  # exp es ExperimentContext
 
-    model = exp_ts['model']
+    model = exp.model
     epochs = config["PT_TST1"]["N_EPOCHS"]
-    early_stopping = EarlyStopping(model,config)
+    early_stopping = EarlyStopping(model, config)
+
 
     train_losses = []
     val_losses = []
@@ -31,22 +31,22 @@ def run_pretrain_ts(config: dict, df_train, df_val, df_test, fold):
             
             # Train
             train_running_loss+= train_one_epoch(
-                **exp_ts,
+                exp,
                 mask_ratio= config["PT_TST1"]["MASK_RATIO"]
 
             )
             model.eval()
             # Validate
             val_running_loss+= validate(
-                **exp_ts,
+                exp,
                 mask_ratio= config["PT_TST1"]["MASK_RATIO"]
             )
 
             # Update learning rate
-            exp_ts['scheduler'].step()
+            exp.scheduler.step()
 
-            avg_train_loss = train_running_loss/ len(exp_ts["train_loader"])
-            avg_val_loss = val_running_loss / len(exp_ts["val_loader"])
+            avg_train_loss = train_running_loss/ len(exp.train_loader)
+            avg_val_loss = val_running_loss / len(exp.val_loader)
             
             # Record losses
             train_losses.append(train_running_loss)
