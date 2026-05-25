@@ -36,7 +36,7 @@ def build_optimizer(params, config: dict) -> torch.optim.Optimizer:
     
     # Si en el futuro necesitas betas, eps... añádelos aquí
 
-    return optimizer_cls(params, **kwargs) # **kwargs -> Keyword Arguments 
+    return optimizer_cls(params, **kwargs) # **kwargs -> Keyword Arguments, desempaqueta el dict 
 
 
 import torch.optim.lr_scheduler as lr_scheduler
@@ -69,15 +69,6 @@ def build_scheduler(optimizer: torch.optim.Optimizer, config: dict) -> torch.opt
         scheduler_params = {"T_0": int(config.get("T_0", 10))}
 
     return scheduler_cls(optimizer, **scheduler_params)
-
-
-def build_criterion(config: dict) -> nn.Module:
-    return nn.CrossEntropyLoss(
-        label_smoothing=float(config["LABEL_SMOOTHING"])
-    )
-
-def compute_loss(outputs, labels, criterion, config):
-    return criterion(outputs, labels)
 
 
 def build_dataloaders(config, df_train, df_val, df_test, harmonizer, normalizer):
