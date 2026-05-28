@@ -20,6 +20,8 @@ FACTORS:
   - "SEX"
   - "EYE_STATUS_AT_SCAN"
 MAX_SEQ_LEN: 200
+STRATIFY_BY_SITE: false
+USE_WEIGHTED_SAMPLER: false
 
 # --- Seed ---
 SEED: 42

@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from data.loaders.dataloader import get_dataloader
+from data.loaders.dataloader1 import build_dataloaders  
 from models.transformer_ts import build_model_ts
 from models.transformer_fc import build_model_fc
 from models.dual_stream import create_dual_stream_model
@@ -70,15 +70,6 @@ def build_scheduler(optimizer: torch.optim.Optimizer, config: dict) -> torch.opt
 
     return scheduler_cls(optimizer, **scheduler_params)
 
-
-def build_dataloaders(config, df_train, df_val, df_test, harmonizer, normalizer):
-    train_loader = get_dataloader(config, df_train, split='train', 
-                                  normalizer=normalizer, harmonizer=harmonizer)
-    val_loader   = get_dataloader(config, df_val,   split='val',   
-                                  normalizer=normalizer, harmonizer=harmonizer)
-    test_loader  = get_dataloader(config, df_test,  split='test',  
-                                  normalizer=normalizer, harmonizer=harmonizer)
-    return train_loader, val_loader, test_loader
 
 
 

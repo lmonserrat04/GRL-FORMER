@@ -26,10 +26,10 @@ def train_one_epoch(ctx: ExperimentContext):
 
     total_loss = 0.0
 
-    for batch in train_loader:
+    for batch,labels in train_loader:
         ts = batch['timeseries'].to(device)
         pcc = batch['pcc_vector'].to(device)
-        y = batch['label'].to(device)
+        y = labels.to(device)
 
         optimizer.zero_grad()
 
@@ -61,10 +61,10 @@ def validate(ctx: ExperimentContext):
     total_loss = 0.0
 
     with torch.no_grad():
-        for batch in val_loader:
+        for batch, labels in val_loader:
             ts = batch['timeseries'].to(device)
             pcc = batch['pcc_vector'].to(device)
-            y = batch['label'].to(device)
+            y = labels.to(device)
 
             loss = task.execution_step(model, ts_batch=ts, pcc_batch=pcc, targets=y)
 

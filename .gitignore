@@ -4,3 +4,4 @@ __pycache__/
 *.1D
 experiments/
 .vscode/
+data/sintetic
