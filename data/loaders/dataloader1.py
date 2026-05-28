@@ -19,7 +19,7 @@ def get_batch_size(config: dict) -> int:
         raise ValueError(f"No se encontró fase para {config['EXPERIMENT_TYPE']}")
     return config[phase_key]["BATCH_SIZE"]
 
-
+#Factory method
 def build_dataloaders(
     config: dict,
     df_train: pd.DataFrame,
@@ -45,8 +45,8 @@ def build_dataloaders(
     test_indices = df_test.index.to_numpy()
 
     # ---- Aquí inyectamos el getter correspondiente a la fase ----
-    getter = ITEM_GETTERS[exp_type]
-    train_ds = SubsetDataset(full_ds, train_indices, getter)
+    getter = ITEM_GETTERS[exp_type] #Strategy
+    train_ds = SubsetDataset(full_ds, train_indices, getter) #Dependency injection
     val_ds   = SubsetDataset(full_ds, val_indices, getter)
     test_ds  = SubsetDataset(full_ds, test_indices, getter)
 

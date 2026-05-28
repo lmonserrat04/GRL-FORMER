@@ -161,7 +161,7 @@ def _patched_build_dataloaders(config, df_train, df_val, df_test,
         make_synthetic_loader(N_SAMPLES // 4, bs),  # test
     )
 
-setup_module.build_dataloaders = _patched_build_dataloaders  # … then patch it
+#setup_module.build_dataloaders = _patched_build_dataloaders  # … then patch it
 
 # ── 4.  Dummy DataFrames (build_experiment receives them but won't use them) ──
 def make_dummy_df(n: int) -> pd.DataFrame:

@@ -125,7 +125,7 @@ class TST2(nn.Module):
             checkpoint_path: Path to weights / Ruta a los pesos
             strict: Whether to match strictly / Si debe coincidir estrictamente
         """
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only= True)
         if 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
         else:

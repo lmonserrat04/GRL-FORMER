@@ -44,6 +44,7 @@ class FullABIDEDataset:
         normalizer: Optional[object] = None,
         harmonizer: Optional[object] = None,
     ):
+        
         self.cfg = config
         self.df = df_full
 
@@ -141,7 +142,7 @@ class SubsetDataset(Dataset):
 
         # Stratify por sitio solo si está activado en la configuración
         stratify_by_site = self.full.cfg.get("STRATIFY_BY_SITE", False)
-        if stratify_by_site and hasattr(self.full, 'SITE_ID') and self.full.site_ids is not None:
+        if stratify_by_site and hasattr(self.full, 'site_ids') and self.full.site_ids is not None:
             strat_labels = [f"{self.full.labels[idx]}_{self.full.site_ids[idx]}" for idx in indices]
             # Convierte etiquetas compuestas en enteros. Ej: ["0_NYU","1_UCLA","0_NYU"] → [0,1,0]
             self.labels_strat = torch.tensor(

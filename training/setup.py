@@ -41,19 +41,17 @@ def build_optimizer(params, config: dict) -> torch.optim.Optimizer:
 
 import torch.optim.lr_scheduler as lr_scheduler
 
-# Registry: nombre → clase de scheduler
 SCHEDULER_REGISTRY = {
     "CosineAnnealingLR":          lr_scheduler.CosineAnnealingLR,
     "CosineAnnealingWarmRestarts": lr_scheduler.CosineAnnealingWarmRestarts,
     "StepLR":                     lr_scheduler.StepLR,
     "ExponentialLR":              lr_scheduler.ExponentialLR,
-    "ReduceLROnPlateau":          lr_scheduler.ReduceLROnPlateau,  # requiere métrica aparte
+    "ReduceLROnPlateau":          lr_scheduler.ReduceLROnPlateau,
 }
 
 def build_scheduler(optimizer: torch.optim.Optimizer, config: dict) -> torch.optim.lr_scheduler.LRScheduler:
     """
     Construye el scheduler según la clave 'SCHEDULER' y 'SCHEDULER_PARAMS'.
-    Si no se especifica, por defecto CosineAnnealingWarmRestarts con T_0 = T_0 de config, o 10.
     """
     scheduler_name = config.get("SCHEDULER", "CosineAnnealingWarmRestarts")
     scheduler_cls = SCHEDULER_REGISTRY.get(scheduler_name)
@@ -61,16 +59,24 @@ def build_scheduler(optimizer: torch.optim.Optimizer, config: dict) -> torch.opt
         raise ValueError(f"Scheduler '{scheduler_name}' no soportado. "
                          f"Disponibles: {list(SCHEDULER_REGISTRY.keys())}")
 
-    # Parámetros específicos del scheduler (todos opcionales, el scheduler usará sus defaults)
     scheduler_params = config.get("SCHEDULER_PARAMS", {})
 
-    # Retrocompatibilidad: si no hay SCHEDULER_PARAMS y no se definió SCHEDULER, usar T_0 antiguo
+    # Retrocompatibilidad con la configuración antigua de T_0
     if not scheduler_params and scheduler_name == "CosineAnnealingWarmRestarts":
         scheduler_params = {"T_0": int(config.get("T_0", 10))}
 
-    return scheduler_cls(optimizer, **scheduler_params)
+    # Sanitización de tipos: Corrige strings con notación científica (ej. "1e-4") a numéricos
+    sanitized_params = {}
+    for key, value in scheduler_params.items():
+        if isinstance(value, str):
+            try:
+                numeric_value = float(value)
+                value = int(numeric_value) if numeric_value.is_integer() else numeric_value
+            except ValueError:
+                pass  # Mantiene argumentos categóricos legítimos (ej. mode="min")
+        sanitized_params[key] = value
 
-
+    return scheduler_cls(optimizer, **sanitized_params)
 
 
 def build_experiment(config, df_train, df_val, df_test,
@@ -134,7 +140,7 @@ def build_experiment(config, df_train, df_val, df_test,
                                          name_chkpt_cont=chkpt_cont,
                                         ).to(device)
         if chkpt_cont:
-            model.load_state_dict(torch.load(chkpt_cont))
+            model.load_state_dict(torch.load(chkpt_cont, weights_only= True))
         task = ClassificationTask(device)
         params = model.parameters()
         phase_config = config["FINETUNING"]

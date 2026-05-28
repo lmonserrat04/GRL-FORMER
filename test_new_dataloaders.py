@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from data.loaders.dataloader1 import build_dataloaders
 
 # ── 1. Parámetros sintéticos ─────────────────────────────────────────────
-SYNTHETIC_DIR = Path("data/datasets/sintetic")
+SYNTHETIC_DIR = Path("data/datasets/synthetic")
 RAW_DIR = SYNTHETIC_DIR / "raw"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 

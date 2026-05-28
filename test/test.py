@@ -10,17 +10,17 @@ from pathlib import Path
 def test(model, fold, accs: list, vals: list, config: dict, test_loader: DataLoader, criterion):
     model.eval()
     y_true, y_preds, y_probs = [], [], []
+    device = config["DEVICE"]
     
     with torch.no_grad():
-        for batch in test_loader:
-            # batch es un diccionario: {'timeseries': Tensor, 'pcc_vector': Tensor, 'label': Tensor}
-            ts = batch['timeseries'].to(config["DEVICE"])
-            pcc = batch['pcc_vector'].to(config["DEVICE"])
-            labels = batch['label'].to(config["DEVICE"])
+        for batch, labels in test_loader:
+            ts = batch['timeseries'].to(device)
+            pcc = batch['pcc_vector'].to(device)
+            y = labels.to(device)
 
             # El modelo dual stream espera dos entradas
             outputs = model(ts, pcc)
-            loss = criterion(outputs, labels)
+            #loss = criterion(outputs, labels)
 
             probs = F.softmax(outputs, dim=1).detach().cpu().numpy()
             y_true.extend(labels.detach().cpu().numpy())
