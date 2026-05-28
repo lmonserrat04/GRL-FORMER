@@ -1,96 +1,148 @@
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import StratifiedKFold, train_test_split
-from pathlib import Path
+# training/cross_validator_template.py
+
 import torch
-from training.train import Trainer
-from test.test import test as run_test
-from utils.logger import Logger
-from setup import build_experiment
-from torch.utils.data import  DataLoader
+import yaml
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from datetime import datetime
+
+from orchestration.run_pretrain_ts import run_pretrain_ts
+from orchestration.run_pretrain_fc import run_pretrain_fc
+from orchestration.run_contrastive import run_contrastive
+from orchestration.run_finetuning import run_finetuning
+from test.test import test
+from utils.checkpoint import get_checkpoint_path
+import torch.nn as nn
 
 
-class CrossValidator:
-    def __init__(self, config: dict):
-        self.config = config
-        self.skf = StratifiedKFold(
-            n_splits=config["N_SPLITS_CV"],
-            shuffle=True,
-            random_state=config["SEED"]
-        )
+def create_experiment_dir(config: dict) -> dict:
+    """Crea los directorios del experimento y actualiza las rutas en config."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    exp_id = f"{timestamp}_{config.get('RUN_NAME', 'exp')}"
 
-    def run(self):
-        df = pd.read_csv(Path(self.config["CSV_PATH"]).resolve())
+    exp_dir = Path("experiments") / exp_id
+    (exp_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (exp_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
 
+    # NO Guarda copia del config usado
+    #shutil.copy("config/config.yaml", exp_dir / "config.yaml")
+
+    config["LOGS_PATH"] = str(exp_dir / "logs")
+    config["CHECKPOINTS_PATH"] = str(exp_dir / "checkpoints")
+    config["RESULTS_PATH"] = str(exp_dir / "results.csv")
+    config["EXP_ID"] = exp_id
+    return config
+
+
+def split_fold(df: pd.DataFrame, fold: int, n_folds: int = 3):
+    """
+    División simple en train / val / test para un fold dado.
+    Retorna tres DataFrames. test = val en este ejemplo simplificado.
+    """
+    n = len(df)
+    fold_size = n // n_folds
+    val_idx = list(range(fold * fold_size, (fold + 1) * fold_size))
+    train_idx = [i for i in range(n) if i not in val_idx]
+    return (
+        df.iloc[train_idx].reset_index(drop=True),
+        df.iloc[val_idx].reset_index(drop=True),
+        df.iloc[val_idx].reset_index(drop=True),
+    )
+
+
+def run_cross_validation(config, n_folds=3):
+    """
+    Ejecuta la validación cruzada completa sobre los datos indicados en config['CSV_PATH'].
+    """
+    config = create_experiment_dir(config)
+
+    # Cargar el CSV con los metadatos
+    csv_path = config.get("CSV_PATH", "data/datasets/synthetic/data.csv")
+    df_global = pd.read_csv(csv_path)
+
+    # Si el CSV no tiene índice original, lo creamos (0..N-1)
+    if df_global.index.name is None and not isinstance(df_global.index, pd.RangeIndex):
+        df_global = df_global.reset_index(drop=True)
+
+    # Acumuladores para resultados de test
+    results_cols = ['Fold', 'Accuracy', 'Precision', 'Recall', 'F1', 'AUC', 'AP', 'FPR', 'FNR', 'TPR', 'TNR']
+    all_results = []
+    accs = []
+
+    for fold in range(n_folds):
+        print(f"\n{'='*60}")
+        print(f"FOLD {fold + 1} / {n_folds}")
+        print(f"{'='*60}")
+
+        df_train, df_val, df_test = split_fold(df_global, fold, n_folds)
+
+        # Fase 1: Pretrain TST1 (series temporales)
+        print(f"\n── Fase 1: pretrain_ts (fold {fold}) ──")
+        run_pretrain_ts(config, df_train, df_val, df_test, fold)
+
+        # Fase 2: Pretrain TST2 (conectividad funcional)
+        print(f"\n── Fase 2: pretrain_fc (fold {fold}) ──")
+        run_pretrain_fc(config, df_train, df_val, df_test, fold)
+
+        # Fase 3: Contrastive learning
+        print(f"\n── Fase 3: contrastive (fold {fold}) ──")
+        chkpt_ts = get_checkpoint_path(config, "PT_TS", fold)
+        chkpt_fc = get_checkpoint_path(config, "PT_FC", fold)
+        run_contrastive(config, df_train, df_val, df_test, fold,
+                        chkpt_ts=chkpt_ts, chkpt_fc=chkpt_fc)
+
+        # Fase 4: Finetuning
+        print(f"\n── Fase 4: finetuning (fold {fold}) ──")
+        chkpt_cont = get_checkpoint_path(config, "CONT", fold)
+        run_finetuning(config, df_train, df_val, df_test, fold,
+                       chkpt_cont=chkpt_cont)
+
+        # Fase 5: Evaluación
+        print(f"\n── Fase 5: evaluación (fold {fold}) ──")
+        config["EXPERIMENT_TYPE"] = "finetune"
+
+        from training.setup import build_experiment, build_dataloaders
+
+        chkpt_finetune = get_checkpoint_path(config, "FINETUNE", fold)
+        exp_finetune = build_experiment(config, df_train, df_val, df_test,
+                                        chkpt_cont=chkpt_finetune)
+        model = exp_finetune.model
+        _, _, test_loader = build_dataloaders(config, df_train, df_val, df_test,
+                                              harmonizer=None, normalizer=None)
+        criterion = nn.CrossEntropyLoss()
         vals = []
-        accs = []
-        val_losses = []
+        test(model, fold, accs, vals, config, test_loader, criterion)
+        if vals:
+            all_results.append(vals[0])
 
-        table_cols = ['Fold', 'Accuracy', 'Precision', 'Recall',
-                      'F1', 'AUC', 'AP', 'FPR', 'FNR', 'TPR', 'TNR']
+    # Guardar resultados finales
+    if all_results:
+        results_df = pd.DataFrame(all_results, columns=results_cols)
+        results_df.to_csv(config["RESULTS_PATH"], index=False)
+        print(f"\nResultados guardados en {config['RESULTS_PATH']}")
+        print(results_df.to_string(index=False))
+        if accs:
+            print(f"\nMean accuracy: {np.mean(accs):.4f} ± {np.std(accs):.4f}")
 
-        df["STRATIFY"] = df['SITE_ID'].astype(str) + '_' + df['DX_GROUP'].astype(str)
-
-        for fold, (train_idx, test_idx) in enumerate(self.skf.split(df, df["STRATIFY"])):
-
-            print(f"\n{'='*80}")
-            print(f"  FOLD {fold + 1} / {self.config['N_SPLITS_CV']}")
-            print(f"{'='*80}")
-
-            df_train, df_val = train_test_split(
-                df.iloc[train_idx],
-                test_size=0.20,
-                stratify=df.iloc[train_idx]["STRATIFY"],
-                random_state=self.config["SEED"]
-            )
-
-            df_test = df.iloc[test_idx]
-
-            
-            model, optimizer, criterion, scheduler, \
-            train_loader, val_loader, test_loader = build_experiment(self.config, df_train, df_val, df_test)
+    print("\n✅ Validación cruzada finalizada.")
 
 
+if __name__ == "__main__":
+    import sys
 
-            trainer = Trainer(
-                model=model,
-                train_loader=train_loader,
-                val_loader=val_loader,
-                config=self.config,
-                optimizer=optimizer,
-                criterion=criterion,
-                scheduler=scheduler,
-                fold=fold
-            )
+    # YAML por defecto
+    config_path = "config/config_synth.yaml"
+    if len(sys.argv) > 1:
+        config_path = sys.argv[1]
 
-            best_val_loss = trainer.fit()
-            val_losses.append(best_val_loss)
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
 
-            run_test(model, fold, accs, vals, self.config, test_loader, criterion) # Pudieras retornar vals y acc en vez de modificar estos
-                                                                                   # objetos mutables inplace
+    # Asegurar dispositivo y rutas (ajustar si es necesario)
+    config["DEVICE"] = "cuda" if torch.cuda.is_available() else "cpu"
+    # Si el YAML no trae CSV_PATH, forzamos el sintético
+    if "CSV_PATH" not in config:
+        config["CSV_PATH"] = "data/datasets/synthetic_cv/data.csv"
 
-            torch.save(model.state_dict(), Path(self.config["CHECKPOINTS_PATH"]).resolve() / f"best_model_fold{fold+1}.pth")
-
-        
-        results = pd.DataFrame(vals, columns=table_cols)
-        results.to_csv(self.config["RESULTS_PATH"], index=False)
-
-        mean_acc = np.mean(accs)
-        std_acc  = np.std(accs)
-        mean_val_loss = np.mean(val_losses)
-
-        print(f"\n{'='*80}")
-        print(results.to_string(index=False))
-        print(f"{'='*80}")
-        print(f"Mean accuracy : {mean_acc:.4f}")
-        print(f"Std  accuracy : {std_acc:.4f}")
-
-       
-        summary_log_path = Path(self.config["LOGS_PATH"]) / "summary.txt"
-        summary_logger   = Logger(summary_log_path, mode='w')
-        summary_logger.log_summary(
-            pt_val_loss=mean_val_loss,
-            t_val_loss=mean_val_loss,
-            mean_acc=mean_acc,
-            std_acc=std_acc
-        )
+    run_cross_validation(config, n_folds=config.get("N_FOLDS", 3))

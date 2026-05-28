@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 import yaml
 from utils.seed import set_seed
-from training.cross_validator_template import run_cross_validation
+from training.cross_validator import run_cross_validation
 
 def main(args):
     with open(args.config, "r", encoding = 'utf-8') as f:

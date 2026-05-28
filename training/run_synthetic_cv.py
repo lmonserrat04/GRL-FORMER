@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from training.cross_validator_template import run_cross_validation
+from training.cross_validator import run_cross_validation
 
 # ------------------------------------------------------------
 # 1. Cargar YAML sintético
