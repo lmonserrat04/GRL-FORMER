@@ -1,46 +1,35 @@
+"""
+TST1: Temporal Transformer
+Processes raw fMRI time series using an ROI-level masking strategy for pre-training.
+"""
+
 import math
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
-
-
-def build_model_ts(config: dict):
-    model_cfg = config["TST1"] 
-    
-    return TST1(
-        input_dim          = config["N_ROIS"],         
-        max_seq_len        = config["MAX_SEQ_LEN"],   
-        d_model            = model_cfg["D_MODEL"],
-        dim_feedforward    = model_cfg["DIM_FEEDFORWARD"],
-        num_encoder_layers = model_cfg["NUM_ENCODER_LAYERS"],
-        n_heads            = model_cfg["N_HEADS"],
-        enc_dropout        = model_cfg["ENC_DROP"],
-        use_cls_token      = model_cfg["USE_CLS_TOKEN"]
-    )
 
 
 class PositionalEncoding(nn.Module):
     """
     Sinusoidal Positional Encoding
     """
-    
+
     def __init__(self, d_model, max_len=200, dropout=0.1):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
-        
+
         # Create positional encoding matrix
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(
             torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
         )
-        
+
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)  # (1, max_len, d_model)
-        
+
         self.register_buffer('pe', pe)
-    
+
     def forward(self, x):
         """
         Args:
@@ -50,46 +39,73 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class TST1(nn.Module):
-    def __init__(self, input_dim = 200, #N_ROIS
-                max_seq_len = 200, #T
-                d_model = 512, 
-                dim_feedforward = 2048,
-                num_encoder_layers = 6,
-                n_heads = 8,
-                enc_dropout = 0.1,
-                use_cls_token = True):
-        
+class TransformerTS(nn.Module):
+    """
+    Temporal Transformer (TST1)
+
+    Input: (batch, T, n_rois) - Time series data
+    Output:
+        - pretrain mode: Reconstructed full time series (batch, T, n_rois)
+        - finetune mode: CLS token features (batch, emb_dim)
+    """
+
+    def __init__(
+        self,
+        n_rois=200,
+        emb_dim=512,
+        n_heads=8,
+        n_layers=6,
+        dim_feedforward=2048,
+        dropout=0.1,
+        max_seq_len=200,
+        use_cls_token=True
+    ):
         super().__init__()
 
-        self.input_dim = input_dim
-        self.d_model = d_model
+        self.n_rois = n_rois
+        self.emb_dim = emb_dim
         self.use_cls_token = use_cls_token
 
-        # CLS token (used for classification tasks)
-        if use_cls_token:
-            self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
-            nn.init.normal_(self.cls_token, std=0.02)
-        
         # Input Embedding Layer: Maps ROI features at each time point to the embedding space
-        self.input_embedding = nn.Linear(input_dim, d_model)
+        self.input_embedding = nn.Linear(n_rois, emb_dim)
 
         # Positional Encoding
         self.pos_encoder = PositionalEncoding(
-            d_model, max_len=max_seq_len + 1, dropout=enc_dropout
+            emb_dim, max_len=max_seq_len + 1, dropout=dropout
         )
 
-        self.transformer_encoder = TransformerEncoderBlock(d_model, dim_feedforward,
-                                    num_encoder_layers, n_heads, enc_dropout)
-        
-        self.pretraining_decoder = PretrainingDecoder(d_model,input_dim,enc_dropout)
+        # CLS token (used for classification tasks)
+        if use_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, emb_dim))
+            nn.init.normal_(self.cls_token, std=0.02)
+
+        # Transformer Encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=emb_dim,
+            nhead=n_heads,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=n_layers
+        )
+
+        # Pre-training Decoder: Reconstructs the time series
+        self.pretrain_decoder = nn.Sequential(
+            nn.Linear(emb_dim, emb_dim // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(emb_dim // 2, n_rois)
+        )
 
         # Layer Normalization
-        self.norm = nn.LayerNorm(d_model)
+        self.norm = nn.LayerNorm(emb_dim)
 
         self._init_weights()
 
-    
     def _init_weights(self):
         """Initialize weights"""
         for module in self.modules():
@@ -97,37 +113,34 @@ class TST1(nn.Module):
                 nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-        
-        
-        
 
-    def forward(self, x: torch.Tensor, mode='pretrain'):
+    def forward(self, x, mode='pretrain'):
         """
         Args:
             x: Tensor, shape (batch, T, n_rois)
             mode: 'pretrain' or 'finetune'
-        
+
         Returns:
             pretrain mode: Reconstructed time series (batch, T, n_rois)
-            finetune mode: CLS token features (batch, d_model)
+            finetune mode: CLS token features (batch, emb_dim)
         """
         batch_size, seq_len, _ = x.shape
-        
+
         # Input embedding
-        x = self.input_embedding(x) * math.sqrt(self.d_model)
-        
+        x = self.input_embedding(x) * math.sqrt(self.emb_dim)
+
         # Add CLS token
         if self.use_cls_token:
             cls_tokens = self.cls_token.expand(batch_size, -1, -1)
             x = torch.cat([cls_tokens, x], dim=1)
-        
+
         # Positional Encoding
         x = self.pos_encoder(x)
-        
+
         # Transformer Encoding
         x = self.transformer_encoder(x)
         x = self.norm(x)
-        
+
         if mode == 'finetune':
             # Return CLS token features
             if self.use_cls_token:
@@ -139,134 +152,166 @@ class TST1(nn.Module):
             # pretrain mode: Reconstruct time series
             if self.use_cls_token:
                 x = x[:, 1:, :]  # Remove CLS token
-            
+
             # Decoding reconstruction
-            output = self.pretraining_decoder(x)  # (batch, T, n_rois)
+            output = self.pretrain_decoder(x)  # (batch, T, n_rois)
             return output
-        
+
     def get_features(self, x):
         """
         Get feature representations (for contrastive learning)
-        
+
         Args:
             x: Tensor, shape (batch, T, n_rois)
-        
+
         Returns:
             features: Tensor, shape (batch, emb_dim)
         """
         return self.forward(x, mode='finetune')
-    
+
     def load_pretrained(self, checkpoint_path, strict=True):
         """
         Load pre-trained weights
-        
+
         Args:
             checkpoint_path: Path to pre-trained weights
             strict: Whether to perform strict matching
         """
-        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only= True)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
         if 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
         else:
             state_dict = checkpoint
-        
+
         # Filter out decoder weights (not needed during fine-tuning)
         if not strict:
             state_dict = {
-                k: v for k, v in state_dict.items() 
+                k: v for k, v in state_dict.items()
                 if 'pretrain_decoder' not in k
             }
-        
+
         self.load_state_dict(state_dict, strict=strict)
         print(f"Loaded pretrained weights from {checkpoint_path}")
 
-    
 
-class TransformerEncoderBlock(nn.Module):
-    def __init__(self,d_model, dim_feedforward, 
-                 num_encoder_layers, n_heads, dropout):  
+class TransformerTSForPretrain(nn.Module):
+    """
+    Wrapper class for TST1 pre-training
+    Includes masking logic and loss calculation
+    """
+
+    def __init__(self, transformer_ts):
         super().__init__()
+        self.transformer = transformer_ts
 
-        self.d_model = d_model
-       
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model, n_heads, dim_feedforward,
-            dropout=dropout, activation="gelu", batch_first=True, norm_first= True
+    def forward(self, x, masked_x, mask):
+        """
+        Args:
+            x: Original time series (batch, T, n_rois)
+            masked_x: Masked time series (batch, T, n_rois)
+            mask: Mask locations (batch, T, n_rois)
+
+        Returns:
+            loss: Reconstruction loss
+            pred: Predicted time series
+        """
+        # Forward pass
+        pred = self.transformer(masked_x, mode='pretrain')
+
+        # Calculate MSE loss for masked positions
+        loss = nn.functional.mse_loss(
+            pred[mask], x[mask], reduction='mean'
         )
 
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
-
-    def forward(self, x: torch.Tensor):
-        # x: (B, T, N_ROIS)
-        x = self.encoder(x) 
-        return x
-    
-
-class PretrainingDecoder(nn.Module):
-    
-    def __init__(self,d_model, n_rois, dropout):
-        super().__init__()
+        return loss, pred
 
 
-        self.pretrain_decoder = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model // 2, n_rois)
-        )
+def create_transformer_ts(config=None):
+    """
+    Factory function to create a TST1 model instance.
 
-    def forward(self,x: torch.Tensor):
-        return self.pretrain_decoder(x)
-        
- 
+    Acepta dos vocabularios de config para ser compatible con todos los
+    call-sites del pipeline (dual_stream usa 'emb_dim'/'dim_feedforward',
+    train_pretrain_min usa 'd_model'/'d_ff').
 
-if __name__ == "__main__":
-    import torch
+    Args:
+        config: Configuration dictionary; uses defaults if None
 
-    config = {
-        "N_ROIS":      200,
-        "MAX_SEQ_LEN": 150,
-        "TST1": {
-            "D_MODEL":             128,
-            "DIM_FEEDFORWARD":     256,
-            "NUM_ENCODER_LAYERS":    2,
-            "N_HEADS":               4,
-            "ENC_DROP":            0.1,
-            "USE_CLS_TOKEN":      True,
-        }
+    Returns:
+        model: TransformerTS instance
+    """
+    default_config = {
+        'n_rois': 200,
+        'emb_dim': 512,
+        'n_heads': 8,
+        'n_layers': 6,
+        'dim_feedforward': 2048,
+        'dropout': 0.1,
+        'max_seq_len': 200,
+        'use_cls_token': True
     }
 
-    model = build_model_ts(config)
+    if config is not None:
+        # Aceptar alias (d_model → emb_dim, d_ff → dim_feedforward)
+        cfg = dict(config)
+        if 'd_model' in cfg and 'emb_dim' not in cfg:
+            cfg['emb_dim'] = cfg.pop('d_model')
+        if 'd_ff' in cfg and 'dim_feedforward' not in cfg:
+            cfg['dim_feedforward'] = cfg.pop('d_ff')
+        default_config.update(cfg)
+
+    return TransformerTS(**default_config)
+
+
+if __name__ == '__main__':
+    # ── Test con vocabulario estándar (emb_dim) ────────────────────────
+    print("── TEST 1: factory con 'emb_dim'/'dim_feedforward' ──────────")
+    model = create_transformer_ts()
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Parámetros entrenables: {n_params:,}")
+    print(f"  ✓ default params: {n_params:,}")
 
-    B, T, R = 4, 100, config["N_ROIS"]
-    x = torch.randn(B, T, R)
+    # ── Test con vocabulario de train_pretrain_min (d_model/d_ff) ──────
+    print("── TEST 2: factory con 'd_model'/'d_ff' (alias) ──────────────")
+    model_alias = create_transformer_ts({
+        'n_rois': 200, 'max_seq_len': 100,
+        'd_model': 512, 'n_layers': 6, 'n_heads': 8,
+        'd_ff': 2048, 'dropout': 0.1,
+    })
+    assert model_alias.emb_dim == 512, "alias d_model no aplicado"
+    print(f"  ✓ emb_dim={model_alias.emb_dim}")
 
+    # ── Forward pretrain ───────────────────────────────────────────────
+    print("── TEST 3: forward pretrain ──────────────────────────────────")
+    x = torch.randn(4, 100, 200)
     model.eval()
     with torch.no_grad():
-        out_pretrain = model.forward(x, mode="pretrain")
-    print(f"[pretrain]  input:  {tuple(x.shape)}")
-    print(f"[pretrain]  output: {tuple(out_pretrain.shape)}")
-    assert out_pretrain.shape == (B, T, R), "❌ pretrain shape incorrecto"
-    print("✓ pretrain OK")
+        out = model(x, mode='pretrain')
+    assert out.shape == (4, 100, 200), out.shape
+    print(f"  ✓ pretrain output {tuple(out.shape)}")
 
+    # ── Forward finetune ───────────────────────────────────────────────
+    print("── TEST 4: forward finetune ──────────────────────────────────")
     with torch.no_grad():
-        out_finetune = model.forward(x, mode="finetune")
-    print(f"[finetune]  output: {tuple(out_finetune.shape)}")
-    assert out_finetune.shape == (B, config["TST1"]["D_MODEL"]), "❌ finetune shape incorrecto"
-    print("✓ finetune OK")
+        feat = model(x, mode='finetune')
+    assert feat.shape == (4, 512), feat.shape
+    print(f"  ✓ finetune output {tuple(feat.shape)}")
 
-    
-    mask = torch.rand(B, T, R) > 0.85
+    # ── Masking + loss wrapper ─────────────────────────────────────────
+    print("── TEST 5: TransformerTSForPretrain (mask + loss) ───────────")
+    wrapper = TransformerTSForPretrain(model)
+    mask = torch.rand(4, 100, 200) > 0.85
     masked_x = x.clone()
     masked_x[mask] = 0.0
+    loss, pred = wrapper(x, masked_x, mask)
+    assert pred.shape == (4, 100, 200)
+    assert loss.item() >= 0.0
+    print(f"  ✓ loss={loss.item():.4f}  pred={tuple(pred.shape)}")
 
-    model.eval()
+    # ── get_features (para contrastive) ────────────────────────────────
+    print("── TEST 6: get_features ──────────────────────────────────────")
     with torch.no_grad():
-        pred = model.forward(masked_x)
-    print(f"[wrapper]   pred:  {tuple(pred.shape)}")
-    assert pred.shape == (B, T, R), "❌ wrapper pred shape incorrecto"
-    print("✓ TransformerTSForPretrain OK")
+        feats = model.get_features(x)
+    assert feats.shape == (4, 512)
+    print(f"  ✓ features {tuple(feats.shape)}")
 
-    print("\n✅ Todos los tests pasaron.")
+    print("\n✅ Todos los tests de transformer_ts.py pasaron.")

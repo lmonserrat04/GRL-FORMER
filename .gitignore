@@ -3,5 +3,8 @@
 __pycache__/
 *.1D
 experiments/
+experiments_test/
 .vscode/
 data/sintetic
+inspect_T.py
+test_run.py

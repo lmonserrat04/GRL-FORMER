@@ -14,7 +14,7 @@ class ConcatFusion(nn.Module):
     Fusión por concatenación simple
     Concatena directamente los dos vectores de características
     """
-    
+
     def __init__(self, dim_ts, dim_fc, output_dim=None):
         """
         Args:
@@ -23,22 +23,22 @@ class ConcatFusion(nn.Module):
             output_dim: Dimensión de salida (si es None, se concatenan directamente)
         """
         super().__init__()
-        
+
         self.dim_ts = dim_ts
         self.dim_fc = dim_fc
         self.output_dim = output_dim or (dim_ts + dim_fc)
-        
+
         if output_dim is not None:
             self.proj = nn.Linear(dim_ts + dim_fc, output_dim)
         else:
             self.proj = nn.Identity()
-    
+
     def forward(self, h_ts, h_fc):
         """
         Args:
             h_ts: Características TST1 (batch, dim_ts)
             h_fc: Características TST2 (batch, dim_fc)
-        
+
         Returns:
             fused: Características fusionadas (batch, output_dim)
         """
@@ -52,7 +52,7 @@ class GatedFusion(nn.Module):
     Utiliza un mecanismo de compuerta aprendible para fusionar ponderadamente las dos características
     gate * h_ts + (1 - gate) * h_fc
     """
-    
+
     def __init__(self, dim_ts, dim_fc, hidden_dim=None):
         """
         Args:
@@ -61,16 +61,16 @@ class GatedFusion(nn.Module):
             hidden_dim: Dimensión de la capa oculta
         """
         super().__init__()
-        
+
         self.dim_ts = dim_ts
         self.dim_fc = dim_fc
-        
+
         # Proyectar ambas características a la misma dimensión
         self.output_dim = max(dim_ts, dim_fc)
-        
+
         self.proj_ts = nn.Linear(dim_ts, self.output_dim)
         self.proj_fc = nn.Linear(dim_fc, self.output_dim)
-        
+
         # Red de compuerta
         hidden_dim = hidden_dim or self.output_dim
         self.gate_net = nn.Sequential(
@@ -79,24 +79,24 @@ class GatedFusion(nn.Module):
             nn.Linear(hidden_dim, self.output_dim),
             nn.Sigmoid()
         )
-    
+
     def forward(self, h_ts, h_fc):
         """
         Args:
             h_ts: Características TST1 (batch, dim_ts)
             h_fc: Características TST2 (batch, dim_fc)
-        
+
         Returns:
             fused: Características fusionadas (batch, output_dim)
         """
         # Proyectar a la misma dimensión
         h_ts_proj = self.proj_ts(h_ts)
         h_fc_proj = self.proj_fc(h_fc)
-        
+
         # Calcular pesos de la compuerta
         concat = torch.cat([h_ts, h_fc], dim=-1)
         gate = self.gate_net(concat)
-        
+
         # Fusión por compuerta
         fused = gate * h_ts_proj + (1 - gate) * h_fc_proj
         return fused
@@ -107,7 +107,7 @@ class CrossAttentionFusion(nn.Module):
     Fusión por atención cruzada (Cross-Attention)
     Utiliza un mecanismo de atención cruzada para fusionar las dos características
     """
-    
+
     def __init__(self, dim_ts, dim_fc, n_heads=8, dropout=0.1):
         """
         Args:
@@ -117,27 +117,27 @@ class CrossAttentionFusion(nn.Module):
             dropout: Ratio de Dropout
         """
         super().__init__()
-        
+
         self.dim_ts = dim_ts
         self.dim_fc = dim_fc
-        
+
         # Unificar a la dimensión mayor
         self.d_model = max(dim_ts, dim_fc)
-        
+
         # Capas de proyección
         self.proj_ts = nn.Linear(dim_ts, self.d_model)
         self.proj_fc = nn.Linear(dim_fc, self.d_model)
-        
+
         # Atención cruzada: TS -> FC
         self.cross_attn_ts2fc = nn.MultiheadAttention(
             self.d_model, n_heads, dropout=dropout, batch_first=True
         )
-        
+
         # Atención cruzada: FC -> TS
         self.cross_attn_fc2ts = nn.MultiheadAttention(
             self.d_model, n_heads, dropout=dropout, batch_first=True
         )
-        
+
         # Red de alimentación hacia adelante (FFN)
         self.ffn = nn.Sequential(
             nn.Linear(self.d_model * 2, self.d_model * 2),
@@ -145,21 +145,21 @@ class CrossAttentionFusion(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(self.d_model * 2, self.d_model)
         )
-        
+
         # Normalización por capas
         self.norm1 = nn.LayerNorm(self.d_model)
         self.norm2 = nn.LayerNorm(self.d_model)
         self.norm3 = nn.LayerNorm(self.d_model)
-        
+
         self.output_dim = self.d_model
-    
+
     def forward(self, h_ts, h_fc, return_attention=False):
         """
         Args:
             h_ts: Características TST1 (batch, dim_ts)
             h_fc: Características TST2 (batch, dim_fc)
             return_attention: Si devuelve los pesos de atención
-        
+
         Returns:
             fused: Características fusionadas (batch, d_model)
             attention_weights (opcional): Diccionario de pesos de atención
@@ -167,27 +167,27 @@ class CrossAttentionFusion(nn.Module):
         # Proyectar a la misma dimensión y añadir dimensión de secuencia
         h_ts = self.proj_ts(h_ts).unsqueeze(1)  # (batch, 1, d_model)
         h_fc = self.proj_fc(h_fc).unsqueeze(1)  # (batch, 1, d_model)
-        
+
         # Atención cruzada
         # TS actúa como Query, FC como Key/Value
-        attn_ts, attn_weights_ts2fc = self.cross_attn_ts2fc(h_ts, h_fc, h_fc) # attn_ts.shape : (batch,1,1)
+        attn_ts, attn_weights_ts2fc = self.cross_attn_ts2fc(h_ts, h_fc, h_fc)
         h_ts = self.norm1(h_ts + attn_ts)
-        
+
         # FC actúa como Query, TS como Key/Value
         attn_fc, attn_weights_fc2ts = self.cross_attn_fc2ts(h_fc, h_ts, h_ts)
         h_fc = self.norm2(h_fc + attn_fc)
-        
+
         # Concatenar y pasar por la red FFN
         concat = torch.cat([h_ts, h_fc], dim=-1)  # (batch, 1, d_model*2)
         fused = self.ffn(concat)  # (batch, 1, d_model)
         fused = self.norm3(fused)
-        
+
         fused_out = fused.squeeze(1)  # (batch, d_model)
-        
+
         if return_attention:
             attention_weights = {
-                'ts2fc': attn_weights_ts2fc,  # (batch, n_heads, 1, 1)
-                'fc2ts': attn_weights_fc2ts   # (batch, n_heads, 1, 1)
+                'ts2fc': attn_weights_ts2fc,
+                'fc2ts': attn_weights_fc2ts,
             }
             return fused_out, attention_weights
         else:
@@ -199,7 +199,7 @@ class BilinearFusion(nn.Module):
     Fusión bilineal
     Utiliza una transformación bilineal para fusionar las dos características
     """
-    
+
     def __init__(self, dim_ts, dim_fc, output_dim=256):
         """
         Args:
@@ -208,36 +208,36 @@ class BilinearFusion(nn.Module):
             output_dim: Dimensión de salida
         """
         super().__init__()
-        
+
         self.dim_ts = dim_ts
         self.dim_fc = dim_fc
         self.output_dim = output_dim
-        
+
         # Capa bilineal
         self.bilinear = nn.Bilinear(dim_ts, dim_fc, output_dim)
-        
+
         # Proyecciones para conexión residual
         self.proj_ts = nn.Linear(dim_ts, output_dim)
         self.proj_fc = nn.Linear(dim_fc, output_dim)
-        
+
         # Normalización por capas
         self.norm = nn.LayerNorm(output_dim)
-    
+
     def forward(self, h_ts, h_fc):
         """
         Args:
             h_ts: Características TST1 (batch, dim_ts)
             h_fc: Características TST2 (batch, dim_fc)
-        
+
         Returns:
             fused: Características fusionadas (batch, output_dim)
         """
         # Transformación bilineal
         bilinear_out = self.bilinear(h_ts, h_fc)
-        
+
         # Residual
         residual = self.proj_ts(h_ts) + self.proj_fc(h_fc)
-        
+
         # Fusión
         fused = self.norm(bilinear_out + residual)
         return fused
@@ -248,8 +248,8 @@ class AttentionPoolingFusion(nn.Module):
     Fusión por pooling de atención
     Utiliza un mecanismo de atención para realizar una fusión ponderada de ambas características
     """
-    
-    def __init__(self,config, dim_ts, dim_fc):
+
+    def __init__(self, dim_ts, dim_fc, hidden_dim=None):
         """
         Args:
             dim_ts: Dimensión de características de TST1
@@ -257,43 +257,43 @@ class AttentionPoolingFusion(nn.Module):
             hidden_dim: Dimensión de la capa oculta
         """
         super().__init__()
-        
+
         self.dim_ts = dim_ts
         self.dim_fc = dim_fc
         self.output_dim = max(dim_ts, dim_fc)
-        
+
         # Proyectar a la misma dimensión
         self.proj_ts = nn.Linear(dim_ts, self.output_dim)
         self.proj_fc = nn.Linear(dim_fc, self.output_dim)
-        
+
         # Cálculo de pesos de atención
-        hidden_dim = config["ATTENTION_POOLING"]["HIDDEN_DIM"] or self.output_dim
+        hidden_dim = hidden_dim or self.output_dim
         self.attention = nn.Sequential(
             nn.Linear(self.output_dim, hidden_dim),
             nn.Tanh(),
             nn.Linear(hidden_dim, 1)
         )
-    
+
     def forward(self, h_ts, h_fc):
         """
         Args:
             h_ts: Características TST1 (batch, dim_ts)
             h_fc: Características TST2 (batch, dim_fc)
-        
+
         Returns:
             fused: Características fusionadas (batch, output_dim)
         """
         # Proyectar a la misma dimensión
         h_ts = self.proj_ts(h_ts)
         h_fc = self.proj_fc(h_fc)
-        
+
         # Apilar como secuencia (batch, 2, output_dim)
         features = torch.stack([h_ts, h_fc], dim=1)
-        
+
         # Calcular pesos de atención
         attn_scores = self.attention(features)  # (batch, 2, 1)
         attn_weights = F.softmax(attn_scores, dim=1)
-        
+
         # Fusión ponderada
         fused = (features * attn_weights).sum(dim=1)  # (batch, output_dim)
         return fused
@@ -304,8 +304,6 @@ class GatedMultiFusion(nn.Module):
     Fusión múltiple por compuerta (Gated Multi-Fusion)
     Ejecuta en paralelo 5 estrategias de fusión (concat, gated, cross_attention, bilinear, attention_pooling),
     aprende una matriz de pesos de compuerta para elegir flexiblemente una o varias estrategias.
-    Mejora: Profundización de la compuerta, inicialización sesgada hacia attention_pooling,
-    almacenamiento de gate_weights para regularización de entropía.
     """
 
     def __init__(self, dim_ts, dim_fc, output_dim=256, hidden_dim=128, dropout=0.1,
@@ -317,7 +315,7 @@ class GatedMultiFusion(nn.Module):
             output_dim: Dimensión final de la salida fusionada
             hidden_dim: Dimensión oculta interna de cada estrategia
             dropout: Ratio de Dropout
-            init_favor_idx: Índice de la estrategia favorecida inicialmente (4=attention_pooling, óptima individualmente)
+            init_favor_idx: Índice de la estrategia favorecida inicialmente
         """
         super().__init__()
         self.dim_ts = dim_ts
@@ -325,7 +323,7 @@ class GatedMultiFusion(nn.Module):
         self.output_dim = output_dim
         self.n_strategies = 5
         self.init_favor_idx = init_favor_idx
-        self.last_gate_weights = None  # Para uso en regularización de entropía
+        self.last_gate_weights = None
 
         # 5 estrategias de fusión
         self.fusions = nn.ModuleList([
@@ -338,11 +336,11 @@ class GatedMultiFusion(nn.Module):
 
         # Las dimensiones de salida pueden variar, unificarlas a output_dim
         fusion_dims = [
-            hidden_dim,  # concat
-            max(dim_ts, dim_fc),  # gated
-            max(dim_ts, dim_fc),  # cross_attention
-            hidden_dim,  # bilinear
-            max(dim_ts, dim_fc),  # attention_pooling
+            hidden_dim,                    # concat
+            max(dim_ts, dim_fc),           # gated
+            max(dim_ts, dim_fc),           # cross_attention
+            hidden_dim,                    # bilinear
+            max(dim_ts, dim_fc),           # attention_pooling
         ]
         self.projections = nn.ModuleList([
             nn.Sequential(
@@ -368,7 +366,7 @@ class GatedMultiFusion(nn.Module):
         self._init_gate_favor_strategy()
 
     def _init_gate_favor_strategy(self):
-        """Inicializa la compuerta: hace que la estrategia init_favor_idx (ej. attention_pooling) tenga mayor peso inicial"""
+        """Inicializa la compuerta favoreciendo la estrategia init_favor_idx"""
         last_linear = self.gate_net[-1]
         with torch.no_grad():
             last_linear.weight.data *= 0.1
@@ -399,7 +397,7 @@ class GatedMultiFusion(nn.Module):
         gate_input = torch.cat([h_ts, h_fc], dim=-1)
         gate_logits = self.gate_net(gate_input)
         gate_weights = F.softmax(gate_logits, dim=-1)
-        self.last_gate_weights = gate_weights  # Para uso en regularización de entropía
+        self.last_gate_weights = gate_weights
 
         # Suma ponderada: (batch, 5, output_dim) * (batch, 5, 1) -> (batch, output_dim)
         fused = (stacked * gate_weights.unsqueeze(-1)).sum(dim=1)
@@ -407,16 +405,16 @@ class GatedMultiFusion(nn.Module):
         return fused
 
 
-def create_fusion_module(config, dim_ts, dim_fc):
+def create_fusion_module(fusion_type, dim_ts, dim_fc, **kwargs):
     """
     Función de fábrica para crear el módulo de fusión
-    
+
     Args:
-        fusion_type: Tipo de fusión ('concat', 'gated', 'cross_attention', 'bilinear', 'attention_pooling')
+        fusion_type: Tipo de fusión
         dim_ts: Dimensión de características de TST1
         dim_fc: Dimensión de características de TST2
         **kwargs: Parámetros adicionales
-    
+
     Returns:
         fusion_module: Instancia del módulo de fusión
     """
@@ -429,41 +427,78 @@ def create_fusion_module(config, dim_ts, dim_fc):
         'gated_multi': GatedMultiFusion,
     }
 
-    fusion_type = config["DUAL_STREAM"]["FUSION_TYPE"]
-    
     if fusion_type not in fusion_classes:
         raise ValueError(f"Unknown fusion type: {fusion_type}. "
                         f"Available: {list(fusion_classes.keys())}")
-    
-   
-    
-    return fusion_classes[fusion_type](config["FUSION"], dim_ts, dim_fc)
 
+    return fusion_classes[fusion_type](dim_ts, dim_fc, **kwargs)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests
+# ──────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    config = {
-        "FUSION": {
-            "ATTENTION_POOLING": {
-                "HIDDEN_DIM": 512
-            }
-        },
-        "DUAL_STREAM": {
-            "FUSION_TYPE": "attention_pooling"
-        }
-    }
+    torch.manual_seed(0)
 
-    batch_size = 4
-    dim_ts = 256  # TST1.D_MODEL
-    dim_fc = 512  # TST2.D_MODEL
+    B, D_TS, D_FC = 4, 512, 256
+    h_ts = torch.randn(B, D_TS)
+    h_fc = torch.randn(B, D_FC)
 
-    h_ts = torch.randn(batch_size, dim_ts)
-    h_fc = torch.randn(batch_size, dim_fc)
+    # ─── TEST 1: todas las estrategias ────────────────────────────────
+    print("── TEST 1: cada estrategia de fusión ─────────────────────────")
+    strategies = ['concat', 'gated', 'cross_attention', 'bilinear', 'attention_pooling']
+    for name in strategies:
+        fusion = create_fusion_module(name, D_TS, D_FC)
+        out = fusion(h_ts, h_fc)
+        assert out.shape == (B, fusion.output_dim), \
+            f"{name}: {out.shape} != {(B, fusion.output_dim)}"
+        print(f"  ✓ {name:>18s} → output {tuple(out.shape)}  "
+              f"(output_dim={fusion.output_dim})")
+    print()
 
-    print("Testing AttentionPoolingFusion...")
-    fusion = AttentionPoolingFusion(config["FUSION"], dim_ts, dim_fc)
-    output = fusion(h_ts, h_fc)
-    print(f"Input  h_ts : {h_ts.shape}")
-    print(f"Input  h_fc : {h_fc.shape}")
-    print(f"Output shape: {output.shape}")
-    print(f"Output dim  : {fusion.output_dim}")
-    print("\nTest passed!")
+    # ─── TEST 2: gated_multi ──────────────────────────────────────────
+    print("── TEST 2: gated_multi ──────────────────────────────────────")
+    fusion = create_fusion_module('gated_multi', D_TS, D_FC, output_dim=128)
+    out = fusion(h_ts, h_fc)
+    assert out.shape == (B, 128), out.shape
+    assert fusion.last_gate_weights is not None
+    assert fusion.last_gate_weights.shape == (B, 5)
+    # Los pesos deben sumar 1 (softmax)
+    sums = fusion.last_gate_weights.sum(dim=-1)
+    assert torch.allclose(sums, torch.ones(B), atol=1e-6)
+    print(f"  ✓ output {tuple(out.shape)}")
+    print(f"  ✓ gate_weights suman 1, shape {tuple(fusion.last_gate_weights.shape)}")
+    print()
+
+    # ─── TEST 3: CrossAttentionFusion con return_attention ────────────
+    print("── TEST 3: CrossAttentionFusion return_attention ────────────")
+    fusion = create_fusion_module('cross_attention', D_TS, D_FC)
+    out, attn = fusion(h_ts, h_fc, return_attention=True)
+    assert out.shape == (B, fusion.output_dim)
+    assert 'ts2fc' in attn and 'fc2ts' in attn
+    print(f"  ✓ output {tuple(out.shape)}")
+    print(f"  ✓ attention keys: {list(attn.keys())}")
+    print()
+
+    # ─── TEST 4: error con tipo desconocido ───────────────────────────
+    print("── TEST 4: tipo desconocido lanza ValueError ────────────────")
+    try:
+        create_fusion_module('no_existe', D_TS, D_FC)
+        raise AssertionError("Debió lanzar ValueError")
+    except ValueError as e:
+        print(f"  ✓ ValueError: {str(e)[:60]}...")
+    print()
+
+    # ─── TEST 5: attention_pooling output_dim correcto ────────────────
+    print("── TEST 5: attention_pooling output_dim = max(dim_ts, dim_fc) ─")
+    fusion = create_fusion_module('attention_pooling', D_TS, D_FC)
+    assert fusion.output_dim == max(D_TS, D_FC)
+    print(f"  ✓ output_dim = {fusion.output_dim} (= max({D_TS}, {D_FC}))")
+
+    fusion = create_fusion_module('attention_pooling', D_FC, D_TS)  # invertido
+    assert fusion.output_dim == max(D_TS, D_FC)
+    print(f"  ✓ invertido también: {fusion.output_dim}")
+    print()
+
+    print("✅ Todos los tests de fusion.py pasaron.")

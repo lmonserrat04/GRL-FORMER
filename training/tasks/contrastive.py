@@ -1,207 +1,171 @@
 """
-Módulo de Aprendizaje Contrastivo
-Implementa la pérdida InfoNCE para alinear las representaciones de características de TST1 y TST2
+Contrastive learning task — configuración óptima del paper (Sec. 3.3 + Table 2):
+    - InfoNCE loss, τ = 0.07
+    - Projection head: input → 256 → 128  (BatchNorm + ReLU)
+    - Los dos encoders (TST1 + TST2) se descongelan durante esta fase
+      (Sec. 4.3.2: unfreeze both > freeze TST1 > freeze TST2 > freeze both)
+
+ContrastiveWrapper.forward devuelve (loss, z_ts, align) donde:
+    loss  : InfoNCE
+    z_ts  : proyección de TST1 (batch, output_dim)
+    align : similitud coseno media de pares positivos (escalar, diagnóstico)
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 
 
 class InfoNCELoss(nn.Module):
-    """
-    Pérdida contrastiva InfoNCE
-    Las características TST1 y TST2 de la misma muestra forman pares positivos
-    Las de muestras diferentes forman pares negativos
-    """
-    
-    def __init__(self, temperature=0.07):
-        """
-        Args:
-            temperature: Parámetro de temperatura que controla la nitidez de la distribución
-        """
+    """Pérdida contrastiva InfoNCE bidireccional (τ default 0.07)."""
+
+    def __init__(self, temperature: float = 0.07):
         super().__init__()
         self.temperature = temperature
-    
-    def forward(self, h_ts, h_fc):
-        """
-        Args:
-            h_ts: Características TST1 (batch, dim_ts)
-            h_fc: Características TST2 (batch, dim_fc)
-        
-        Returns:
-            loss: Pérdida InfoNCE
-        """
+
+    def forward(self, h_ts: torch.Tensor, h_fc: torch.Tensor) -> torch.Tensor:
         batch_size = h_ts.shape[0]
-        
+
         # Normalización L2
         h_ts = F.normalize(h_ts, p=2, dim=1)
         h_fc = F.normalize(h_fc, p=2, dim=1)
-        
-        # Calcular matriz de similitud
-        # sim[i, j] = h_ts[i] · h_fc[j]
-        sim_matrix = torch.matmul(h_ts, h_fc.T) / self.temperature  # (batch, batch)
-        
-        # Los pares positivos están en la diagonal
+
+        # Matriz de similitud (batch, batch); positivos en la diagonal
+        sim = torch.matmul(h_ts, h_fc.T) / self.temperature
         labels = torch.arange(batch_size, device=h_ts.device)
-        
-        # Pérdida contrastiva bidireccional
-        # TST1 -> TST2
-        loss_ts2fc = F.cross_entropy(sim_matrix, labels)
-        # TST2 -> TST1
-        loss_fc2ts = F.cross_entropy(sim_matrix.T, labels)
-        
-        # Pérdida promedio
-        loss = (loss_ts2fc + loss_fc2ts) / 2
-        
-        return loss
+
+        loss_ts2fc = F.cross_entropy(sim, labels)
+        loss_fc2ts = F.cross_entropy(sim.T, labels)
+        return (loss_ts2fc + loss_fc2ts) / 2
 
 
 class ProjectionHead(nn.Module):
-    """
-    Cabezal de Proyección
-    Proyecta las características al espacio de aprendizaje contrastivo
-    """
-    
-    def __init__(self, input_dim, hidden_dim=256, output_dim=128):
-        """
-        Args:
-            input_dim: Dimensión de entrada
-            hidden_dim: Dimensión de la capa oculta
-            output_dim: Dimensión de salida
-        """
+    """MLP de proyección: input → hidden → output (BatchNorm + ReLU)."""
+
+    def __init__(self, input_dim: int, hidden_dim: int = 256, output_dim: int = 128):
         super().__init__()
-        
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
+            nn.Linear(hidden_dim, output_dim),
         )
-    
-    def forward(self, x):
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
 
 
 class ContrastiveWrapper(nn.Module):
     """
-    Clase envolvente (wrapper) de aprendizaje contrastivo
-    Contiene los cabezales de proyección y la pérdida contrastiva
+    Cabezales de proyección + pérdida InfoNCE.
+
+    Config óptima (Table 2): hidden_dim=256, output_dim=128, temperature=0.07.
     """
-    
+
     def __init__(
         self,
-        dim_ts,
-        dim_fc,
-        proj_hidden_dim=256,
-        proj_output_dim=128,
-        temperature=0.07,
-        loss_type='infonce'
+        dim_ts: int,
+        dim_fc: int,
+        hidden_dim: int = 256,
+        output_dim: int = 128,
+        temperature: float = 0.07,
     ):
-        """
-        Args:
-            dim_ts: Dimensión de características de TST1
-            dim_fc: Dimensión de características de TST2
-            proj_hidden_dim: Dimensión oculta del cabezal de proyección
-            proj_output_dim: Dimensión de salida del cabezal de proyección
-            temperature: Parámetro de temperatura
-            loss_type: Tipo de pérdida ('infonce' o 'ntxent')
-        """
         super().__init__()
-        
-        # Cabezales de proyección
-        self.proj_ts = ProjectionHead(dim_ts, proj_hidden_dim, proj_output_dim)
-        self.proj_fc = ProjectionHead(dim_fc, proj_hidden_dim, proj_output_dim)
-        
-        # Pérdida contrastiva
-        if loss_type == 'infonce':
-            self.criterion = InfoNCELoss(temperature)
-        #elif loss_type == 'ntxent':
-        #    self.criterion = NTXentLoss(temperature)
-        else:
-            raise ValueError(f"Unknown loss type: {loss_type}")
-        
-        self.loss_type = loss_type
-    
-    def forward(self, h_ts, h_fc):
-        """
-        Args:
-            h_ts: Características TST1 (batch, dim_ts)
-            h_fc: Características TST2 (batch, dim_fc)
-        
-        Returns:
-            loss: Pérdida contrastiva
-            z_ts: Características proyectadas de TST1
-            z_fc: Características proyectadas de TST2
-        """
-        # Proyección
+        self.proj_ts = ProjectionHead(dim_ts, hidden_dim, output_dim)
+        self.proj_fc = ProjectionHead(dim_fc, hidden_dim, output_dim)
+        self.criterion = InfoNCELoss(temperature)
+
+    def forward(self, h_ts: torch.Tensor, h_fc: torch.Tensor):
         z_ts = self.proj_ts(h_ts)
         z_fc = self.proj_fc(h_fc)
-        
-        # Calcular pérdida
         loss = self.criterion(z_ts, z_fc)
+
+        # Diagnóstico: similitud coseno media de pares positivos
+        z_ts_n = F.normalize(z_ts, p=2, dim=1)
+        z_fc_n = F.normalize(z_fc, p=2, dim=1)
+        align = (z_ts_n * z_fc_n).sum(dim=1).mean()
+
+        return loss, z_ts, align
+
         
-        return loss, z_ts, z_fc
+class ContrastiveTask(nn.Module):
+    def __init__(self, dim_ts, dim_fc, hidden_dim=256, output_dim=128,
+                 temperature=0.07, device=None):
+        super().__init__()
+        self.contrastive_module = ContrastiveWrapper(
+            dim_ts=dim_ts, dim_fc=dim_fc,
+            hidden_dim=hidden_dim, output_dim=output_dim,
+            temperature=temperature,
+        )
+        self._device = device or torch.device("cpu")
 
-
-class ContrastiveTask:
-
-    def __init__(
-        self,
-        dim_ts,
-        dim_fc,
-        proj_hidden_dim=256,
-        proj_output_dim=128,
-        temperature=0.07,
-        loss_type='infonce',
-        device = 'cuda'
-    ):
-        
-
-        self.contrastive_module = ContrastiveWrapper(dim_ts,dim_fc,proj_hidden_dim,proj_output_dim,temperature,loss_type).to(device)
-
-
-    def execution_step(self, model,batch_ts, batch_pcc):
-
-        h_ts, h_fc = model.get_features(batch_ts, batch_pcc)
-
-        loss,_,_ = self.contrastive_module(h_ts,h_fc)
-
+    def execution_step(self, model, timeseries, pcc_vector):
+        timeseries = timeseries.to(self._device)
+        pcc_vector = pcc_vector.to(self._device)
+        h_ts, h_fc = model.get_features(timeseries, pcc_vector)
+        loss, _, _ = self.contrastive_module(h_ts, h_fc)
         return loss
+# ──────────────────────────────────────────────────────────────────────
+# Tests
+# ──────────────────────────────────────────────────────────────────────
 
+if __name__ == "__main__":
+    torch.manual_seed(0)
 
+    B, D_TS, D_FC = 16, 512, 256
 
+    # ─── TEST 1: InfoNCELoss ──────────────────────────────────────────
+    print("── TEST 1: InfoNCELoss ──────────────────────────────────────")
+    h_ts = torch.randn(B, D_TS)   # salidas de encoder (antes de proyectar)
+    h_fc = torch.randn(B, D_FC)
+    D_PROJ = 128
+    z_ts = torch.randn(B, D_PROJ)  # proyecciones
+    z_fc = torch.randn(B, D_PROJ)
 
-if __name__ == '__main__':
-    # Prueba del módulo de aprendizaje contrastivo
-    print("Testing contrastive learning modules...")
+    crit = InfoNCELoss(temperature=0.07)
+    loss = crit(z_ts, z_fc)
+    assert loss.dim() == 0 and loss.item() > 0
+    print(f"  ✓ loss escalar: {loss.item():.4f}")
+
+    # Pares perfectos → menor loss que aleatorios
+    same = torch.randn(B, D_PROJ)
+    loss_perfect = crit(same, same.clone())
+    loss_random = crit(torch.randn(B, D_PROJ), torch.randn(B, D_PROJ))
+    assert loss_perfect.item() < loss_random.item()
+    print(f"  ✓ pares perfectos {loss_perfect.item():.4f} < aleatorios {loss_random.item():.4f}\n")
+
+    # ─── TEST 2: ProjectionHead ───────────────────────────────────────
+    print("── TEST 2: ProjectionHead ───────────────────────────────────")
+    head = ProjectionHead(D_TS, hidden_dim=256, output_dim=128)
+    head.train()  # BatchNorm con batch>1
+    z = head(h_ts)
+    assert z.shape == (B, 128)
+    print(f"  ✓ output {tuple(z.shape)}\n")
+
+    # ─── TEST 3: ContrastiveWrapper (firma exacta de train_finetune_min) ──
+    print("── TEST 3: ContrastiveWrapper ───────────────────────────────")
+    wrapper = ContrastiveWrapper(dim_ts=D_TS, dim_fc=D_FC,
+                                 temperature=0.07, hidden_dim=256, output_dim=128)
     
-    batch_size = 32
-    dim_ts = 512
-    dim_fc = 256
-    
-    h_ts = torch.randn(batch_size, dim_ts)
-    h_fc = torch.randn(batch_size, dim_fc)
-    
-    # Prueba de InfoNCE
-    print("\nTesting InfoNCELoss:")
-    criterion = InfoNCELoss(temperature=0.07)
-    loss = criterion(h_ts, h_ts)
-    print(f"  Loss: {loss.item():.4f}")
-    
-    # Prueba de NT-Xent
-    # print("\nTesting NTXentLoss:")
-    # criterion = NTXentLoss(temperature=0.5)
-    # loss = criterion(h_ts, h_fc)
-    # print(f"  Loss: {loss.item():.4f}")
-    
-    # Prueba de ContrastiveWrapper
-    print("\nTesting ContrastiveWrapper:")
-    wrapper = ContrastiveWrapper(dim_ts, dim_fc)
-    loss, z_ts, z_fc = wrapper(h_ts, h_fc)
-    print(f"  Loss: {loss.item():.4f}")
-    print(f"  Projected TST1 shape: {z_ts.shape}")
-    print(f"  Projected TST2 shape: {z_fc.shape}")
-    
-    print("\nAll tests passed!")
+    loss, z_ts, align = wrapper(h_ts, h_fc)
+
+    assert loss.dim() == 0
+    assert z_ts.shape == (B, 128)
+    assert align.dim() == 0
+    assert -1.0 <= align.item() <= 1.0
+    print(f"  ✓ loss={loss.item():.4f}  z_ts {tuple(z_ts.shape)}  align={align.item():.4f}\n")
+
+    # ─── TEST 4: 3-tuple unpacking como en train_finetune_min ─────────
+    print("── TEST 4: unpacking (loss, _, align) ───────────────────────")
+    loss, _, align = wrapper(h_ts, h_fc)
+    print(f"  ✓ unpacking OK → loss={loss.item():.4f}  align={align.item():.4f}\n")
+
+    # ─── TEST 5: defaults coinciden con la config del paper ───────────
+    print("── TEST 5: defaults == config del paper ─────────────────────")
+    w = ContrastiveWrapper(dim_ts=D_TS, dim_fc=D_FC)
+    assert w.criterion.temperature == 0.07
+    assert w.proj_ts.net[0].out_features == 256
+    assert w.proj_ts.net[-1].out_features == 128
+    print(f"  ✓ τ=0.07  hidden=256  output=128\n")
+
+    print("✅ Todos los tests de contrastive.py pasaron.")

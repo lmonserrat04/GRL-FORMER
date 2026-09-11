@@ -18,9 +18,6 @@ def run_pretrain_ts(config: dict, df_train, df_val, df_test, fold):
     train_losses = []
     val_losses = []
 
-    
-
-    
     with tqdm(range(epochs), unit="epoch") as tepoch:
         
         for epoch in tepoch:
@@ -30,7 +27,7 @@ def run_pretrain_ts(config: dict, df_train, df_val, df_test, fold):
             model.train()
             
             # Train
-            train_running_loss+= train_one_epoch(
+            train_running_loss += train_one_epoch(
                 exp,
                 mask_ratio= config["PT_TST1"]["MASK_RATIO"]
 

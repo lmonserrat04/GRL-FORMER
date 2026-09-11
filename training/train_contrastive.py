@@ -1,74 +1,223 @@
 """
-Contrastive learning training and validation functions.
-Uses ExperimentContext for clean argument passing.
+Fase contrastive — alinea las representaciones de TST1 y TST2 con InfoNCE.
+
+Config óptima (paper Sec. 3.3 + Sec. 4.3.2 + Table 2):
+    epochs=50, InfoNCE τ=0.07, proj 256→128,
+    unfreeze BOTH encoders (Sec. 4.3.2), Adam lr=1e-4 wd=1e-4, bs=32.
 """
 
+from pathlib import Path
+
 import torch
+
 from training.context import ExperimentContext
 from training.tasks.contrastive import ContrastiveTask
+from training.callbacks import EarlyStopping
+from training.setup import build_experiment
 
 
-def train_one_epoch(ctx: ExperimentContext):
-    """Train one epoch for contrastive learning.
+# ──────────────────────────────────────────────────────────────────────
+# Train / validate
+# ──────────────────────────────────────────────────────────────────────
 
-    Args:
-        ctx: Experiment context containing model, task, optimizer, loaders, device.
-
-    Returns:
-        Total loss over the training set.
-    """
+def train_one_epoch(ctx: ExperimentContext) -> float:
+    """Un epoch de contraste. Devuelve la suma de losses + align acumulado."""
     model = ctx.model
     task: ContrastiveTask = ctx.task
     optimizer = ctx.optimizer
     train_loader = ctx.train_loader
     device = ctx.device
 
-    total_loss = 0.0
-
     model.train()
     task.contrastive_module.train()
 
-    for batch, _ in train_loader:
-        timeseries = batch['timeseries'].to(device)
-        pcc_vector = batch['pcc_vector'].to(device)
+    total_loss = 0.0
+    total_align = 0.0
+
+    for batch in train_loader:
+        ts = batch["timeseries"].to(device)
+        pcc = batch["pcc_vector"].to(device)
 
         optimizer.zero_grad()
-        loss = task.execution_step(model, timeseries, pcc_vector)
-
+        h_ts, h_fc = model.get_features(ts, pcc)
+        loss, _, align = task.contrastive_module(h_ts, h_fc)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         total_loss += loss.item()
+        total_align += align.item()
 
-    return total_loss
+    return total_loss, total_align
 
 
-def validate(ctx: ExperimentContext):
-    """Validate contrastive learning.
-
-    Args:
-        ctx: Experiment context.
-
-    Returns:
-        Total loss over the validation set.
-    """
+def validate(ctx: ExperimentContext) -> tuple[float, float]:
+    """Val loss + align, sin grad."""
     model = ctx.model
     task: ContrastiveTask = ctx.task
     val_loader = ctx.val_loader
     device = ctx.device
 
-    total_loss = 0.0
-
     model.eval()
     task.contrastive_module.eval()
 
+    total_loss = 0.0
+    total_align = 0.0
+
     with torch.no_grad():
-        for batch, _ in val_loader:
-            timeseries = batch['timeseries'].to(device)
-            pcc_vector = batch['pcc_vector'].to(device)
-
-            loss = task.execution_step(model, timeseries, pcc_vector)
-
+        for batch in val_loader:
+            ts = batch["timeseries"].to(device)
+            pcc = batch["pcc_vector"].to(device)
+            h_ts, h_fc = model.get_features(ts, pcc)
+            loss, _, align = task.contrastive_module(h_ts, h_fc)
             total_loss += loss.item()
+            total_align += align.item()
 
-    return total_loss
+    return total_loss, total_align
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Loop completo
+# ──────────────────────────────────────────────────────────────────────
+
+def run_contrastive(config: dict, fold_idx: int = 0, save_dir: str | None = None):
+    """
+    Entrena la fase contrastive con early stopping sobre val loss.
+
+    Returns:
+        (train_losses, val_losses, train_aligns, val_aligns) — listas por epoch.
+    """
+    config["EXPERIMENT_TYPE"] = "contrastive"
+    exp = build_experiment(config, fold_idx=fold_idx)
+
+    phase = config["T_CONTRASTIVE"]
+    epochs = phase["N_EPOCHS"]
+
+    es_config = {
+        "PATIENCE":  phase.get("PATIENCE", 20),
+        "MIN_DELTA": phase.get("MIN_DELTA", 1e-4),
+    }
+    early_stopping = EarlyStopping(exp.model, es_config)
+
+    train_losses, val_losses = [], []
+    train_aligns, val_aligns = [], []
+
+    for epoch in range(1, epochs + 1):
+        t_loss, t_align = train_one_epoch(exp)
+        v_loss, v_align = validate(exp)
+        exp.scheduler.step()
+
+        n_train = len(exp.train_loader)
+        n_val = len(exp.val_loader)
+        avg_tl, avg_vl = t_loss / n_train, v_loss / n_val
+        avg_ta, avg_va = t_align / n_train, v_align / n_val
+
+        train_losses.append(avg_tl); val_losses.append(avg_vl)
+        train_aligns.append(avg_ta); val_aligns.append(avg_va)
+
+        print(f"Epoch {epoch:3d}/{epochs} | "
+              f"train={avg_tl:.4f} align={avg_ta:.4f} | "
+              f"val={avg_vl:.4f} align={avg_va:.4f}")
+
+        if early_stopping(exp.model, avg_vl):
+            print(f"Early stopping en epoch {epoch} "
+                  f"(best val={early_stopping.min_val_loss:.4f})")
+            break
+
+    early_stopping.restore(exp.model)
+
+    if save_dir is not None:
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        path = save_dir / f"best_contrastive_fold_{fold_idx}.pt"
+        torch.save(exp.model.state_dict(), path)
+        print(f"Checkpoint guardado en {path}")
+
+    return train_losses, val_losses, train_aligns, val_aligns
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests
+# ──────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import numpy as np
+    import pandas as pd
+    import tempfile
+    import shutil
+    from pathlib import Path
+
+    torch.manual_seed(0)
+
+    tmp = Path(tempfile.mkdtemp())
+    interp_dir = tmp / "interp"; interp_dir.mkdir()
+    save_dir = tmp / "ckpts"
+
+    N, T, R = 30, 100, 200
+    D = R * (R - 1) // 2
+    sites = ["SITE_0", "SITE_1", "SITE_2"]
+
+    rng = np.random.default_rng(0)
+    rows = []
+    for i in range(N):
+        fid = f"S{1000 + i}"
+        arr = rng.standard_normal((T, R)).astype(np.float32)
+        np.savetxt(interp_dir / f"interp_{fid}_rois_cc200.1D", arr)
+        rows.append({"FILE_ID": fid, "SUB_ID": i,
+                     "SITE_ID": sites[i % 3],
+                     "DX_GROUP": int(rng.integers(0, 2))})
+    pd.DataFrame(rows).to_csv(tmp / "meta.csv", index=False)
+
+    config = {
+        "DEVICE": "cpu", "NUM_WORKERS": 0, "SEED": 0,
+        "RAW_PATH": str(interp_dir), "INTERP_PATH": str(interp_dir),
+        "CSV_PATH": str(tmp / "meta.csv"), "ATLAS": "cc200", "PREFIX": "interp_",
+        "N_ROIS": R, "MAX_SEQ_LEN": T, "LABEL_COL": "DX_GROUP",
+        "EVAL_PROTOCOL": "kfold", "N_FOLDS": 3,
+        "TST1": {"D_MODEL": 64, "DIM_FEEDFORWARD": 128, "NUM_ENCODER_LAYERS": 2,
+                 "N_HEADS": 4, "ENC_DROP": 0.1, "USE_CLS_TOKEN": True},
+        "TST2": {"PCC_DIM": D, "D_MODEL": 64, "N_HEADS": 4,
+                 "NUM_ENCODER_LAYERS": 2, "DIM_FEEDFORWARD": 128, "ENC_DROP": 0.1},
+        "DUAL_STREAM": {"FUSION_TYPE": "attention_pooling", "NUM_CLASSES": 2,
+                        "CLASSIFIER_DROPOUT": 0.3, "MLP_DIMS": [256, 64, 2]},
+        "FUSION": {"ATTENTION_POOLING": {"HIDDEN_DIM": 128}},
+        "T_CONTRASTIVE": {
+            "N_EPOCHS": 3, "BATCH_SIZE": 4, "LR": 1e-4, "WEIGHT_DECAY": 1e-4,
+            "TEMPERATURE": 0.07, "PROJ_HIDDEN_DIM": 256, "PROJ_OUTPUT_DIM": 128,
+            "OPTIMIZER": "Adam",
+            "SCHEDULER": "CosineAnnealingLR",
+            "SCHEDULER_PARAMS": {"T_max": 3, "eta_min": 1e-6},
+            "PATIENCE": 5, "MIN_DELTA": 1e-4,
+        },
+        "FINETUNING": {"N_EPOCHS": 2, "BATCH_SIZE": 4, "LR": 5e-5,
+                       "WEIGHT_DECAY": 1e-4, "OPTIMIZER": "Adam",
+                       "SCHEDULER": "CosineAnnealingLR",
+                       "SCHEDULER_PARAMS": {"T_max": 2, "eta_min": 5e-7}},
+        "CKPT_TST1": None, "CKPT_TST2": None,
+    }
+
+    print("── TEST 1: run_contrastive (3 epochs) ──────────────────────")
+    tl, vl, ta, va = run_contrastive(config, fold_idx=0, save_dir=save_dir)
+    assert len(tl) == 3 and len(vl) == 3
+    assert len(ta) == 3 and len(va) == 3
+    assert all(-1.0 <= a <= 1.0 for a in ta + va)
+    print(f"  ✓ train loss {tl[0]:.4f}→{tl[-1]:.4f}  align {ta[0]:.4f}→{ta[-1]:.4f}\n")
+
+    print("── TEST 2: checkpoint guardado ──────────────────────────────")
+    ckpt = save_dir / "best_contrastive_fold_0.pt"
+    assert ckpt.exists()
+    state = torch.load(ckpt, map_location="cpu", weights_only=True)
+    assert isinstance(state, dict) and len(state) > 0
+    print(f"  ✓ {ckpt.name} ({len(state)} tensores)\n")
+
+    print("── TEST 3: unfreeze both (encoders entrenables) ────────────")
+    from training.setup import build_experiment
+    cfg = {**config, "EXPERIMENT_TYPE": "contrastive"}
+    exp = build_experiment(cfg, fold_idx=0)
+    n_trainable = sum(p.numel() for p in exp.model.parameters() if p.requires_grad)
+    n_total = sum(p.numel() for p in exp.model.parameters())
+    assert n_trainable == n_total, f"{n_trainable}/{n_total} entrenables"
+    print(f"  ✓ {n_trainable:,}/{n_total:,} params entrenables\n")
+
+    shutil.rmtree(tmp)
+    print("✅ Todos los tests de train_contrastive.py pasaron.")
