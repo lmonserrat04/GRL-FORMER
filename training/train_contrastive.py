@@ -135,6 +135,133 @@ def run_contrastive(config: dict, fold_idx: int = 0, save_dir: str | None = None
 
     return train_losses, val_losses, train_aligns, val_aligns
 
+def run_contrastive_global(config: dict, save_dir: str | None = None):
+    """
+    Fase contrastive GLOBAL (paper Sec. 3.3).
+    Corre UNA sola vez sobre el split 70/10/20, ANTES de folds.
+    Guarda checkpoint con proj heads para que finetune lo cargue.
+
+    Estrategia de freezing (repo OPTIMAL_CONFIGURATION.md):
+        - freeze TST1
+        - unfreeze TST2
+        - projection heads siempre entrenables
+    """
+    from pathlib import Path
+    from tqdm import tqdm
+    from models.transformer_ts import create_transformer_ts
+    from models.transformer_fc import create_transformer_fc
+    from training.tasks.contrastive import ContrastiveWrapper
+    from data.loaders.dataloader import get_single_split_loaders
+
+    device = torch.device(config.get("DEVICE", "cuda" if torch.cuda.is_available() else "cpu"))
+    phase = config["T_CONTRASTIVE"]
+
+    # ─── Encoders ─────────────────────────────────────────────────────
+    tst1_cfg = {
+        "n_rois":          config["N_ROIS"],
+        "emb_dim":         config["TST1"]["D_MODEL"],
+        "n_layers":        config["TST1"]["NUM_ENCODER_LAYERS"],
+        "n_heads":         config["TST1"]["N_HEADS"],
+        "dim_feedforward": config["TST1"]["DIM_FEEDFORWARD"],
+        "dropout":         config["TST1"]["ENC_DROP"],
+        "max_seq_len":     config["MAX_SEQ_LEN"],
+        "use_cls_token":   config["TST1"]["USE_CLS_TOKEN"],
+    }
+    tst2_cfg = {
+        "pcc_dim":         config["TST2"]["PCC_DIM"],
+        "d_model":         config["TST2"]["D_MODEL"],
+        "n_layers":        config["TST2"]["NUM_ENCODER_LAYERS"],
+        "n_heads":         config["TST2"]["N_HEADS"],
+        "dim_feedforward": config["TST2"]["DIM_FEEDFORWARD"],
+        "dropout":         config["TST2"]["ENC_DROP"],
+    }
+
+    tst1 = create_transformer_ts(tst1_cfg).to(device)
+    tst2 = create_transformer_fc(tst2_cfg).to(device)
+
+    if config.get("CKPT_TST1"):
+        tst1.load_pretrained(config["CKPT_TST1"], strict=False)
+    if config.get("CKPT_TST2"):
+        tst2.load_pretrained(config["CKPT_TST2"], strict=False)
+
+    # ─── Projection heads ────────────────────────────────────────────
+    contrastive_module = ContrastiveWrapper(
+        dim_ts=tst1.emb_dim,
+        dim_fc=tst2.d_model,
+        hidden_dim=phase["PROJ_HIDDEN_DIM"],
+        output_dim=phase["PROJ_OUTPUT_DIM"],
+        temperature=phase["TEMPERATURE"],
+    ).to(device)
+
+    # ─── Freezing: TST1 congelado, TST2 entrenable ───────────────────
+    for p in tst1.parameters():
+        p.requires_grad = False
+    for p in tst2.parameters():
+        p.requires_grad = True
+
+    trainable = [p for p in tst2.parameters() if p.requires_grad] + \
+                list(contrastive_module.parameters())
+
+    optimizer = torch.optim.Adam(
+        trainable,
+        lr=float(phase["LR"]),
+        weight_decay=float(phase["WEIGHT_DECAY"]),
+    )
+
+    # ─── Loaders (split global 70/10/20) ─────────────────────────────
+    train_loader, _, _, _ = get_single_split_loaders(
+        config,
+        batch_size=phase["BATCH_SIZE"],
+        num_workers=config.get("NUM_WORKERS", 0),
+        seed=config.get("SEED", 42),
+    )
+
+    # ─── Loop ────────────────────────────────────────────────────────
+    epochs = phase["N_EPOCHS"]
+
+    with tqdm(range(1, epochs + 1), unit="epoch") as tepoch:
+        for epoch in tepoch:
+            tepoch.set_description(f"Contrastive GLOBAL | Epoch {epoch}")
+
+            tst1.eval()   # frozen
+            tst2.train()
+            contrastive_module.train()
+
+            total_loss, total_align = 0.0, 0.0
+            for batch in train_loader:
+                ts_b = batch["timeseries"].to(device)
+                pcc_b = batch["pcc_vector"].to(device)
+
+                with torch.no_grad():
+                    h_ts = tst1(ts_b, mode='finetune')
+                h_fc = tst2(pcc_b, mode='finetune')
+
+                loss, _, align = contrastive_module(h_ts, h_fc)
+
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(trainable, max_norm=1.0)
+                optimizer.step()
+
+                total_loss += loss.item()
+                total_align += align.item()
+
+            n = len(train_loader)
+            tepoch.set_postfix(loss=f"{total_loss/n:.4f}",
+                               align=f"{total_align/n:.4f}")
+
+    # ─── Guardar checkpoint completo ─────────────────────────────────
+    if save_dir is not None:
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        path = save_dir / "contrastive_global.pt"
+        torch.save({
+            "tst1_state_dict":        tst1.state_dict(),
+            "tst2_state_dict":        tst2.state_dict(),
+            "proj_head_1_state_dict": contrastive_module.proj_ts.state_dict(),
+            "proj_head_2_state_dict": contrastive_module.proj_fc.state_dict(),
+        }, path)
+        print(f"  💾 {path}")
 
 # ──────────────────────────────────────────────────────────────────────
 # Tests

@@ -263,6 +263,54 @@ def get_finetune_loaders(
         split_info["test_site"] = split["test_site"]
 
     return train_loader, val_loader, test_loader, split_info
+
+
+def get_single_split_loaders(
+    config: dict,
+    batch_size: int = 32,
+    num_workers: int = 4,
+    train_ratio: float = 0.70,
+    val_ratio: float = 0.10,
+    test_ratio: float = 0.20,
+    seed: int = 42,
+):
+    """
+    Split único 70/10/20 a nivel de sujeto.
+    Usado por la fase contrastive global (paper Sec. 3.3).
+
+    Returns:
+        (train_loader, val_loader, test_loader, split_info)
+    """
+    data = load_raw_data(config)
+    labels = data["labels"]
+    subject_indices = data["subject_indices"]
+    site_ids = data["site_ids"]
+
+    train_idx, val_idx, test_idx = get_subject_level_train_val_test_split(
+        labels, subject_indices, site_ids=site_ids,
+        train_ratio=train_ratio, val_ratio=val_ratio, test_ratio=test_ratio,
+        seed=seed,
+    )
+
+    ts, pcc = data["timeseries"], data["pcc_vectors"]
+
+    train_ds = TwoTSTDataset(ts[train_idx], pcc[train_idx], labels[train_idx])
+    val_ds   = TwoTSTDataset(ts[val_idx],   pcc[val_idx],   labels[val_idx])
+    test_ds  = TwoTSTDataset(ts[test_idx],  pcc[test_idx],  labels[test_idx])
+
+    pin = torch.cuda.is_available()
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                              drop_last=True, num_workers=num_workers, pin_memory=pin)
+    val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=pin)
+    test_loader  = DataLoader(test_ds, batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=pin)
+
+    split_info = {
+        "train_idx": train_idx, "val_idx": val_idx, "test_idx": test_idx,
+        "subject_indices": subject_indices,
+    }
+    return train_loader, val_loader, test_loader, split_info
 # ──────────────────────────────────────────────────────────────────────
 # Tests (usan .1D sintéticos en disco)
 # ──────────────────────────────────────────────────────────────────────

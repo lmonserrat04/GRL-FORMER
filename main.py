@@ -80,45 +80,49 @@ def build_folds(config: dict) -> list[dict]:
 # ──────────────────────────────────────────────────────────────────────
 # Pipeline
 # ──────────────────────────────────────────────────────────────────────
-
 def run_pipeline(config: dict):
     ckpt_dir = Path(config["CHECKPOINTS_PATH"])
 
-    # ─── 1. Pretrain TST1 ─────────────────────────────────────────────
+    # ─── 1. Pretrain TST1 ────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("FASE 1: Pretrain TST1 (ROI-level masking)")
     print("=" * 60)
     run_pretrain_ts(config, fold_idx=0, save_dir=ckpt_dir)
 
-    # ─── 2. Pretrain TST2 ─────────────────────────────────────────────
+    # ─── 2. Pretrain TST2 ────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("FASE 2: Pretrain TST2 (element-level masking)")
     print("=" * 60)
     run_pretrain_fc(config, fold_idx=0, save_dir=ckpt_dir)
 
-    # Actualizar rutas de checkpoints para que finetune los cargue
     config["CKPT_TST1"] = str(ckpt_dir / "best_pt_ts_fold_0.pt")
     config["CKPT_TST2"] = str(ckpt_dir / "best_pt_fc_fold_0.pt")
 
-    # ─── 3. Folds ─────────────────────────────────────────────────────
+    # ─── 3. Contrastive GLOBAL (una vez) ─────────────────────────────
+    print("\n" + "=" * 60)
+    print("FASE 3: Contrastive global (paper Sec. 3.3)")
+    print("=" * 60)
+    from training.train_contrastive import run_contrastive_global
+    run_contrastive_global(config, save_dir=ckpt_dir)
+    config["CKPT_CONTRASTIVE"] = str(ckpt_dir / "contrastive_global.pt")
+
+    # ─── 4. Folds (solo finetuning) ──────────────────────────────────
     folds = build_folds(config)
     print(f"\n{'=' * 60}")
-    print(f"FASE 3: {config.get('EVAL_PROTOCOL', 'kfold').upper()} — "
-          f"{len(folds)} folds")
+    print(f"FASE 4: {config.get('EVAL_PROTOCOL', 'kfold').upper()} — {len(folds)} folds")
     print("=" * 60)
 
     fold_metrics = []
     for fold_idx, split in enumerate(folds):
         tag = split.get("test_site", f"fold{fold_idx}")
         print(f"\n──── Fold {fold_idx + 1}/{len(folds)} ({tag}) ────")
-
         metrics = finetune_fold(config, fold_idx=fold_idx, save_dir=ckpt_dir)
         metrics["fold_idx"] = fold_idx
         if "test_site" in split:
             metrics["test_site"] = split["test_site"]
         fold_metrics.append(metrics)
 
-    # ─── 4. Resumen ───────────────────────────────────────────────────
+    # ─── 5. Resumen (igual que antes) ────────────────────────────────
     metric_names = ["auc", "accuracy", "sensitivity", "specificity", "f1"]
     summary = {
         "protocol": config.get("EVAL_PROTOCOL", "kfold"),
@@ -128,8 +132,7 @@ def run_pipeline(config: dict):
     }
 
     print(f"\n{'=' * 60}")
-    print(f"RESUMEN ({summary['protocol'].upper()}, "
-          f"mean ± std [95% CI])")
+    print(f"RESUMEN ({summary['protocol'].upper()}, mean ± std [95% CI])")
     print("=" * 60)
 
     for name in metric_names:
@@ -144,8 +147,7 @@ def run_pipeline(config: dict):
             "ci95_lower": lo, "ci95_upper": hi,
         }
         label = name.upper() if name == "auc" else name.capitalize()
-        print(f"  {label:12s}: {mean_v:.4f} ± {std_v:.4f}  "
-              f"[{lo:.4f}, {hi:.4f}]")
+        print(f"  {label:12s}: {mean_v:.4f} ± {std_v:.4f}  [{lo:.4f}, {hi:.4f}]")
 
     summary["all_folds"] = fold_metrics
     summary["reproducibility"] = get_reproducibility_info()
@@ -157,7 +159,6 @@ def run_pipeline(config: dict):
     print(f"\n✅ Pipeline completado.")
     print(f"   Resultados: {results_path}")
     return summary
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Entry point

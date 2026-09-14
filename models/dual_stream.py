@@ -32,18 +32,38 @@ class DualStreamModel(nn.Module):
         num_classes=2,
         dropout=0.1,
         mlp_dims=None,
+        proj_head_1=None,
+        proj_head_2=None,
     ):
+        """
+        Args:
+            proj_head_1: Projection head entrenada en contrastive (TST1).
+                         Si se pasa, la fusión opera sobre z (128), no sobre h_ts.
+            proj_head_2: Idem para TST2.
+        """
         super().__init__()
 
         self.transformer_ts = create_transformer_ts(tst1_config)
         self.transformer_fc = create_transformer_fc(tst2_config)
 
-        self.dim_ts = self.transformer_ts.emb_dim
-        self.dim_fc = self.transformer_fc.d_model
+        self.dim_ts = self.transformer_ts.emb_dim   # 512
+        self.dim_fc = self.transformer_fc.d_model   # 256
+
+        # Projection heads opcionales
+        self.proj_head_1 = proj_head_1
+        self.proj_head_2 = proj_head_2
+
+        # La fusión opera sobre z si hay projections
+        if proj_head_1 is not None and proj_head_2 is not None:
+            dim_ts_fusion = proj_head_1.net[-1].out_features   # 128
+            dim_fc_fusion = proj_head_2.net[-1].out_features   # 128
+        else:
+            dim_ts_fusion = self.dim_ts
+            dim_fc_fusion = self.dim_fc
 
         fusion_config = fusion_config or {}
         self.fusion = create_fusion_module(
-            fusion_type, self.dim_ts, self.dim_fc, **fusion_config
+            fusion_type, dim_ts_fusion, dim_fc_fusion, **fusion_config
         )
         self.fusion_type = fusion_type
         self.num_classes = num_classes
@@ -62,27 +82,17 @@ class DualStreamModel(nn.Module):
         self.classifier = nn.Sequential(*layers)
 
     def forward(self, timeseries, pcc_vector, return_features=False, return_attention=False):
-        """
-        Args:
-            timeseries: Serie temporal (batch, T, n_rois)
-            pcc_vector: Vector PCC (batch, pcc_dim)
-            return_features: Si devuelve características intermedias
-            return_attention: Si devuelve pesos de atención
-
-        Returns:
-            logits: Logits de clasificación (batch, num_classes)
-            features (opcional): Características fusionadas (batch, fusion_dim)
-            attention_weights (opcional): Diccionario de pesos de atención
-        """
-        # Obtener características de TST1
         h_ts = self.transformer_ts(timeseries, mode='finetune')
-
-        # Obtener características de TST2
         h_fc = self.transformer_fc(pcc_vector, mode='finetune')
+
+        # Aplicar projections si están presentes (fine-tuning con projections del paper)
+        if self.proj_head_1 is not None:
+            h_ts = self.proj_head_1(h_ts)
+        if self.proj_head_2 is not None:
+            h_fc = self.proj_head_2(h_fc)
 
         # Fusión
         if return_attention and hasattr(self.fusion, 'forward'):
-            # Verificar si la fusión admite devolver atención
             if 'return_attention' in self.fusion.forward.__code__.co_varnames:
                 fused, attention_weights = self.fusion(h_ts, h_fc, return_attention=True)
             else:
@@ -92,7 +102,6 @@ class DualStreamModel(nn.Module):
             fused = self.fusion(h_ts, h_fc)
             attention_weights = None
 
-        # Clasificación
         logits = self.classifier(fused)
 
         result = [logits]
@@ -103,8 +112,8 @@ class DualStreamModel(nn.Module):
 
         if len(result) == 1:
             return result[0]
-        else:
-            return tuple(result)
+        return tuple(result)
+    
 
     def get_features(self, timeseries, pcc_vector):
         """
@@ -202,7 +211,6 @@ class DualStreamModelSingleBranch(nn.Module):
         logits = self.classifier(features)
         return logits
 
-
 def create_dual_stream_model(
     n_rois=200,
     time_points=100,
@@ -214,6 +222,8 @@ def create_dual_stream_model(
     num_classes=2,
     dropout=0.1,
     mlp_dims=None,
+    proj_head_1=None,
+    proj_head_2=None,
 ):
     tst1_config = {
         'n_rois': n_rois, 'emb_dim': tst1_emb_dim,
@@ -221,7 +231,6 @@ def create_dual_stream_model(
         'dropout': dropout, 'max_seq_len': time_points,
         'use_cls_token': True,
     }
-
     tst2_config = {
         'pcc_dim': pcc_dim, 'd_model': tst2_d_model,
         'n_heads': 8, 'n_layers': 2, 'dim_feedforward': 512,
@@ -240,8 +249,9 @@ def create_dual_stream_model(
         num_classes=num_classes,
         dropout=dropout,
         mlp_dims=mlp_dims,
+        proj_head_1=proj_head_1,
+        proj_head_2=proj_head_2,
     )
-
 # ──────────────────────────────────────────────────────────────────────
 # Tests
 # ──────────────────────────────────────────────────────────────────────
