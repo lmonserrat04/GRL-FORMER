@@ -1,57 +1,38 @@
-from tqdm import tqdm
-from training.setup import build_experiment
-from training.train_finetune import train_one_epoch, validate
-from training.callbacks import EarlyStopping
-import torch.nn as nn
-from utils.checkpoint import get_checkpoint_path
-from training.context import ExperimentContext
-import torch
+"""Wrapper fino: finetune por fold. Delega en training.train_finetune.
+
+Requiere config['CKPT_CONTRASTIVE'] definido (lo produce Fase 3).
+"""
+import time
+from pathlib import Path
+
+from training.train_finetune import finetune_fold as _run
 
 
-def run_finetuning(config: dict, df_train, df_val, df_test, fold, chkpt_cont):
-    config["EXPERIMENT_TYPE"] = "finetune"
-    exp = build_experiment(config, df_train, df_val, df_test, chkpt_cont=chkpt_cont)
+def run_finetuning(config: dict, fold_idx: int):
+    """
+    Fase 4: Finetune de un fold.
+    Carga projections congeladas del contrastive global.
+    """
+    save_dir = Path(config["CHECKPOINTS_PATH"])
 
-    model = exp.model
-    epochs = config["FINETUNING"]["N_EPOCHS"]
-    early_stopping = EarlyStopping(model, config)
+    if not config.get("CKPT_CONTRASTIVE"):
+        raise ValueError("[orchestration] Falta config['CKPT_CONTRASTIVE'] para finetune")
 
-    train_losses = []
-    val_losses = []
+    print(f"\n{'='*60}")
+    print(f"[orchestration] FASE 4: Finetune fold {fold_idx}")
+    print(f"  TST1 ← {config['CKPT_TST1']}")
+    print(f"  TST2 ← {config['CKPT_TST2']}")
+    print(f"  Proj ← {config['CKPT_CONTRASTIVE']}")
+    print(f"  epochs : {config['FINETUNING']['N_EPOCHS']}")
+    print(f"  lr     : {config['FINETUNING']['LR']}")
+    print(f"{'='*60}")
 
-    with tqdm(range(epochs), unit="epoch") as tepoch:
-        for epoch in tepoch:
-            tepoch.set_description(f"Epoch {epoch+1}")
-            train_running_loss = 0.0
-            val_running_loss = 0.0
-            model.train()
+    t0 = time.time()
+    metrics = _run(config, fold_idx=fold_idx, save_dir=save_dir)
+    elapsed = time.time() - t0
 
-            # Train
-            train_running_loss += train_one_epoch(exp)
-
-            model.eval()
-            # Validate
-            val_running_loss += validate(exp)
-
-            # Update learning rate
-            exp.scheduler.step()
-
-            avg_train_loss = train_running_loss / len(exp.train_loader)
-            avg_val_loss = val_running_loss / len(exp.val_loader)
-
-            train_losses.append(train_running_loss)
-            val_losses.append(val_running_loss)
-
-            best: nn.Module | None = early_stopping(model, avg_val_loss)
-
-            if best:
-                model.load_state_dict(early_stopping.best_model.state_dict())
-                print(f"Early stopping finetuning, Epoca: {epoch + 1}. Mejor loss: {early_stopping.min_val_loss:4f}")
-                break
-
-            tepoch.set_postfix(v_loss=f"{avg_val_loss:.4f}")
-
-            print(f"Train Loss: {train_running_loss:.4f}, Val Loss: {val_running_loss:.4f}")
-
-        save_path = get_checkpoint_path(config, "FINETUNE", fold)
-        torch.save(model.state_dict(), save_path)
+    print(f"[orchestration] Finetune fold {fold_idx} completado en {elapsed/60:.1f} min")
+    print(f"  AUC={metrics['auc']:.4f}  ACC={metrics['accuracy']:.4f}  "
+          f"Sens={metrics['sensitivity']:.4f}  Spec={metrics['specificity']:.4f}  "
+          f"F1={metrics['f1']:.4f}")
+    return metrics

@@ -20,6 +20,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
+_DATA_CACHE = {}
+
 from data.preprocessing.splitters import (
     get_subject_level_fold_splits,
     get_subject_level_train_val_test_split,
@@ -27,10 +29,16 @@ from data.preprocessing.splitters import (
 )
 
 
-def _compute_pcc_upper(ts: np.ndarray) -> np.ndarray:
-    """ts: (R, T) → triángulo superior de la matriz de correlación (D,)."""
+def _compute_pcc_upper(ts: np.ndarray) -> np.ndarray | None:
+    """ts: (R, T) → triángulo superior de la matriz de correlación (D,).
+    Devuelve None si alguna ROI es constante (varianza 0) — el paper
+    descarta estos sujetos en QC (Sec. 4.1.3)."""
     ts_t = torch.from_numpy(ts).float()
+    if (ts_t.std(dim=1) < 1e-8).any():
+        return None
     corr = torch.corrcoef(ts_t)
+    if torch.isnan(corr).any() or torch.isinf(corr).any():
+        return None
     triu = torch.triu_indices(corr.shape[0], corr.shape[1], offset=1)
     return corr[triu[0], triu[1]].numpy().astype(np.float32)
 
@@ -43,6 +51,13 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
         use_interp = config.get("USE_INTERP", False)
 
     raw_key = "INTERP_PATH" if use_interp else "RAW_PATH"
+    cache_key = (config.get("RAW_PATH"), config.get("INTERP_PATH"),
+                 config.get("CSV_PATH"), use_interp,
+                 config.get("MAX_SEQ_LEN"), config.get("ATLAS"),
+                 config.get("PREFIX"))
+    if cache_key in _DATA_CACHE:
+        return _DATA_CACHE[cache_key]
+
     root = Path(config[raw_key])
     if not root.is_absolute():
         root = (project_root / root).resolve()
@@ -64,7 +79,7 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
     df = pd.read_csv(csv_path)
 
     ts_list, pcc_list, labels, subj_ids, sites = [], [], [], [], []
-    missing = too_short = 0
+    missing = too_short = const_roi = 0
 
     for _, row in tqdm(df.iterrows(), total=len(df), desc=f"Cargando .1D de {root.name}"):
         fname = f"{prefix}{row['FILE_ID']}_rois_{atlas}.1D"
@@ -88,8 +103,13 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
         arr = arr[:max_seq_len]
 
         ts = arr.T.astype(np.float32)                    # (R, T)
+        pcc = _compute_pcc_upper(ts)
+        if pcc is None:
+            const_roi += 1
+            continue
+
         ts_list.append(ts.T)                             # (T, R)
-        pcc_list.append(_compute_pcc_upper(ts))
+        pcc_list.append(pcc)
         labels.append(int(row[label_col]))
         subj_ids.append(int(row["SUB_ID"]))
         sites.append(str(row["SITE_ID"]))
@@ -98,6 +118,8 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
         print(f"⚠ {missing} sujetos saltados por .1D ausente")
     if too_short:
         print(f"⚠ {too_short} sujetos saltados por T < MAX_SEQ_LEN ({max_seq_len})")
+    if const_roi:
+        print(f"⚠ {const_roi} sujetos saltados por ROIs constantes (QC paper Sec. 4.1.3)")
 
     if not ts_list:
         raise RuntimeError(f"No se cargó ningún .1D de {root}")
@@ -111,6 +133,7 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
     }
     print(f"Cargados {len(labels)} sujetos  |  "
           f"ts={data['timeseries'].shape}  pcc={data['pcc_vectors'].shape}")
+    _DATA_CACHE[cache_key] = data
     return data
 
 
@@ -245,6 +268,7 @@ def get_finetune_loaders(
 
     pin = torch.cuda.is_available()
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                              drop_last=True,
                               num_workers=num_workers, pin_memory=pin)
     val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                               num_workers=num_workers, pin_memory=pin)

@@ -1,44 +1,32 @@
-# --- Identificacion del experimento ---
-RUN_NAME: "transformer_baseline"
-
-# --- Rutas ---
-RAW_PATH: "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/cc200"
-INTERP_PATH: "./data/datasets/ABIDE_pcp/cpac/filt_noglobal/cc200_interp"
-CSV_PATH: "./data/csv/data_train.csv"
-LOGS_PATH: "./logs/"
-
-# --- Dataset ---
-ATLAS: "cc200"
+RUN_NAME: transformer_baseline
+RAW_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200
+INTERP_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp
+CSV_PATH: ./data/csv/data_train.csv
+LOGS_PATH: ./logs/
+ATLAS: cc200
 N_ROIS: 200
 TR: 2.0
-PREFIX: "interp_"
-MIN_TIMESTEPS: 100
+PREFIX: interp_
+MIN_TIMESTEPS: 116
 WINDOW_SIZE: 128
-LABEL_COL: "DX_GROUP"
+LABEL_COL: DX_GROUP
 FACTORS:
-  - "AGE_AT_SCAN"
-  - "SEX"
-  - "EYE_STATUS_AT_SCAN"
-MAX_SEQ_LEN: 100
+- AGE_AT_SCAN
+- SEX
+- EYE_STATUS_AT_SCAN
+MAX_SEQ_LEN: 116
 STRATIFY_BY_SITE: false
 USE_WEIGHTED_SAMPLER: false
-USE_INTERP: false         # false → lee de RAW_PATH; true → INTERP_PATH
-
-# --- Seed ---
+USE_INTERP: false
 SEED: 42
-
-# --- Cross Validation ---
-N_FOLDS: 1
-
-# --- Arquitectura (Transformer + MLP) ---
+N_FOLDS: 5
 TST1:
   D_MODEL: 512
   DIM_FEEDFORWARD: 2048
   NUM_ENCODER_LAYERS: 6
   N_HEADS: 8
   ENC_DROP: 0.1
-  USE_CLS_TOKEN: True
-
+  USE_CLS_TOKEN: true
 TST2:
   PCC_DIM: 19900
   D_MODEL: 256
@@ -46,47 +34,43 @@ TST2:
   NUM_ENCODER_LAYERS: 2
   DIM_FEEDFORWARD: 512
   ENC_DROP: 0.1
-
 DUAL_STREAM:
-  FUSION_TYPE: "attention_pooling"
+  FUSION_TYPE: attention_pooling
   NUM_CLASSES: 2
-  CLASSIFIER_DROPOUT: 0.1
-  MLP_DIMS: [256, 64, 2]
-
+  CLASSIFIER_DROPOUT: 0.3
+  MLP_DIMS:
+  - 256
+  - 64
+  - 2
 FUSION:
   ATTENTION_POOLING:
     HIDDEN_DIM: 512
-
-# --- Preentrenamiento ---
 PT_TST1:
-  N_EPOCHS: 100
+  N_EPOCHS: 500
   BATCH_SIZE: 32
   LR: 1e-4
   WEIGHT_DECAY: 1e-4
   MASK_RATIO: null
-  OPTIMIZER: "AdamW"
-  SCHEDULER: "CosineAnnealingLR"
+  OPTIMIZER: Adam
+  SCHEDULER: CosineAnnealingLR
   SCHEDULER_PARAMS:
-    T_max: 100
+    T_max: 500
     eta_min: 1e-6
   PATIENCE: 30
   MIN_DELTA: 0.001
-
 PT_TST2:
-  N_EPOCHS: 100
+  N_EPOCHS: 500
   BATCH_SIZE: 32
   LR: 1e-4
   WEIGHT_DECAY: 1e-4
   MASK_RATIO: 0.15
-  OPTIMIZER: "AdamW"
-  SCHEDULER: "CosineAnnealingLR"
+  OPTIMIZER: Adam
+  SCHEDULER: CosineAnnealingLR
   SCHEDULER_PARAMS:
-    T_max: 100
+    T_max: 500
     eta_min: 1e-6
   PATIENCE: 30
   MIN_DELTA: 0.001
-
-# --- Contrastive ---
 T_CONTRASTIVE:
   N_EPOCHS: 50
   BATCH_SIZE: 32
@@ -95,25 +79,22 @@ T_CONTRASTIVE:
   TEMPERATURE: 0.07
   PROJ_HIDDEN_DIM: 256
   PROJ_OUTPUT_DIM: 128
-  OPTIMIZER: "Adam"
-
-# --- Finetuning ---
+  OPTIMIZER: Adam
 FINETUNING:
   N_EPOCHS: 100
   BATCH_SIZE: 32
   LR: 5e-5
   WEIGHT_DECAY: 1e-4
-  OPTIMIZER: "AdamW"
-  SCHEDULER: "CosineAnnealingLR"
+  OPTIMIZER: Adam
+  SCHEDULER: CosineAnnealingLR
   SCHEDULER_PARAMS:
     T_max: 100
     eta_min: 5e-7
-  PATIENCE: 30
+  PATIENCE: 20
   MIN_DELTA: 0.001
-
-# --- Checkpoints ---
 CHECKPOINTS:
-  PT_TS: "best_pt_ts_model"
-  PT_FC: "best_pt_fc_model"
-  CONT: "best_cont_model"
-  FINETUNE: "best_finetuned_model"
+  PT_TS: best_pt_ts_model
+  PT_FC: best_pt_fc_model
+  CONT: best_cont_model
+  FINETUNE: best_finetuned_model
+EVAL_PROTOCOL: kfold

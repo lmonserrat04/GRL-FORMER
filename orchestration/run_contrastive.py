@@ -1,43 +1,40 @@
+"""Wrapper fino: contrastive global. Delega en training.train_contrastive.
+
+Requiere que config tenga CKPT_TST1 y CKPT_TST2 ya definidos.
+Guarda contrastive_global.pt con TST1, TST2 y proj heads.
+"""
+import time
 from pathlib import Path
-import torch
-from tqdm import tqdm
-from training.setup import build_experiment
-from training.train_contrastive import train_one_epoch
-from utils.checkpoint import get_checkpoint_path
-from training.context import ExperimentContext
+
+from training.train_contrastive import run_contrastive_global as _run
 
 
-def run_contrastive(
-    config: dict, df_train, df_val, df_test, fold, chkpt_ts, chkpt_fc
-):
+def run_contrastive(config: dict):
     """
-    Fase de aprendizaje contrastivo (sin validación, como en el paper original).
-    Guarda el checkpoint al final de todas las épocas.
+    Fase 3: Contrastive GLOBAL (paper Sec. 3.3).
+    Estrategia: freeze TST1, unfreeze TST2.
     """
-    config["EXPERIMENT_TYPE"] = "contrastive"
+    save_dir = Path(config["CHECKPOINTS_PATH"])
 
-    exp: ExperimentContext = build_experiment(
-        config, df_train, df_val, df_test,
-        chkpt_ts=chkpt_ts, chkpt_fc=chkpt_fc
-    )
+    # Verificaciones rápidas
+    for key in ("CKPT_TST1", "CKPT_TST2"):
+        if not config.get(key):
+            raise ValueError(f"[orchestration] Falta config['{key}'] para correr contrastive")
 
-    epochs = config["T_CONTRASTIVE"]["N_EPOCHS"]
-    losses = []
+    print(f"\n{'='*60}")
+    print(f"[orchestration] FASE 3: Contrastive GLOBAL")
+    print(f"  TST1 ← {config['CKPT_TST1']}")
+    print(f"  TST2 ← {config['CKPT_TST2']}")
+    print(f"  epochs : {config['T_CONTRASTIVE']['N_EPOCHS']}")
+    print(f"  τ      : {config['T_CONTRASTIVE']['TEMPERATURE']}")
+    print(f"  freeze : TST1 (unfreeze TST2)")
+    print(f"{'='*60}")
 
-    with tqdm(range(epochs), unit="epoch") as tepoch:
-        for epoch in tepoch:
-            tepoch.set_description(f"Contrastive Epoch {epoch+1}")
+    t0 = time.time()
+    _run(config, save_dir=save_dir)
+    elapsed = time.time() - t0
 
-            train_loss = train_one_epoch(exp)
-            avg_loss = train_loss / len(exp.train_loader)
-
-            # Scheduler step (si lo hubiera; actualmente no se usa en contrastive)
-            # exp.scheduler.step()
-
-            losses.append(train_loss)
-            tepoch.set_postfix(loss=f"{avg_loss:.4f}")
-
-    save_path = get_checkpoint_path(config, "CONT", fold)
-    torch.save(exp.model.state_dict(), save_path)
-
-    return losses
+    ckpt = save_dir / "contrastive_global.pt"
+    print(f"[orchestration] Contrastive completado en {elapsed/60:.1f} min")
+    print(f"  checkpoint : {ckpt}")
+    return ckpt

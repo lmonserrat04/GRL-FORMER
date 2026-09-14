@@ -1,63 +1,31 @@
-from tqdm import tqdm
-from training.setup import build_experiment
-from training.train_pretrain_fc import train_one_epoch, validate
-from training.callbacks import EarlyStopping
-import torch.nn as nn
-from utils.checkpoint import get_checkpoint_path
-from training.context import ExperimentContext
-import torch
+"""Wrapper fino: pretrain TST2. Delega en training.train_pretrain_fc."""
+import time
+from pathlib import Path
+
+from training.train_pretrain_fc import run_pretrain_fc as _run
 
 
-def run_pretrain_fc(config: dict, df_train, df_val, df_test, fold):
-    config["EXPERIMENT_TYPE"] = "pretrain_fc"
-    exp = build_experiment(config, df_train, df_val, df_test)  # ExperimentContext
+def run_pretrain_fc(config: dict, fold_idx: int = 0):
+    """
+    Fase 2: Pretrain TST2 (element-level masking).
+    Guarda best_pt_fc_fold_{fold_idx}.pt en config['CHECKPOINTS_PATH'].
+    """
+    save_dir = Path(config["CHECKPOINTS_PATH"])
 
-    model = exp.model
-    epochs = config["PT_TST2"]["N_EPOCHS"]
-    early_stopping = EarlyStopping(model, config)
+    print(f"\n{'='*60}")
+    print(f"[orchestration] FASE 2: Pretrain TST2")
+    print(f"  epochs   : {config['PT_TST2']['N_EPOCHS']}")
+    print(f"  batch    : {config['PT_TST2']['BATCH_SIZE']}")
+    print(f"  save_dir : {save_dir}")
+    print(f"{'='*60}")
 
-    train_losses = []
-    val_losses = []
+    t0 = time.time()
+    train_losses, val_losses = _run(config, fold_idx=fold_idx, save_dir=save_dir)
+    elapsed = time.time() - t0
 
-    with tqdm(range(epochs), unit="epoch") as tepoch:
-        for epoch in tepoch:
-            tepoch.set_description(f"Epoch {epoch+1}")
-            train_running_loss = 0.0
-            val_running_loss = 0.0
-            model.train()
-
-            # Train
-            train_running_loss += train_one_epoch(
-                exp,
-                mask_ratio=config["PT_TST2"]["MASK_RATIO"]
-            )
-
-            model.eval()
-            # Validate
-            val_running_loss += validate(
-                exp,
-                mask_ratio=config["PT_TST2"]["MASK_RATIO"]
-            )
-
-            # Update learning rate
-            exp.scheduler.step()
-
-            avg_train_loss = train_running_loss / len(exp.train_loader)
-            avg_val_loss = val_running_loss / len(exp.val_loader)
-
-            train_losses.append(train_running_loss)
-            val_losses.append(val_running_loss)
-
-            best: nn.Module | None = early_stopping(model, avg_val_loss)
-
-            if best:
-                model.load_state_dict(early_stopping.best_model.state_dict())
-                print(f"Early stopping pretraining pcc, Epoca: {epoch + 1}. Mejor loss: {early_stopping.min_val_loss:4f}")
-                break
-
-            tepoch.set_postfix(v_loss=f"{avg_val_loss:.4f}")
-
-            print(f"Train Loss: {train_running_loss:.4f}, Val Loss: {val_running_loss:.4f}")
-
-        save_path = get_checkpoint_path(config, "PT_FC", fold)
-        torch.save(model.state_dict(), save_path)
+    ckpt = save_dir / f"best_pt_fc_fold_{fold_idx}.pt"
+    print(f"[orchestration] Pretrain TST2 completado en {elapsed/60:.1f} min")
+    print(f"  epochs ejecutados : {len(train_losses)}")
+    print(f"  best val loss     : {min(val_losses):.4f}")
+    print(f"  checkpoint        : {ckpt}")
+    return train_losses, val_losses
