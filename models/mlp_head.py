@@ -3,6 +3,7 @@ import torch
 
 class MLPHead(nn.Module):
     """
+    
     Cabeza de clasificacion estandar
 
     """
@@ -24,7 +25,7 @@ class MLPHead(nn.Module):
 
                 if self.dropout > 0:
                     layers.append(nn.Dropout(self.dropout))
-                    
+                               
         self.mlp_head = nn.Sequential(*layers)
 
     def forward(self,x):

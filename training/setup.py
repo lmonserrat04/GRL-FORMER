@@ -1,5 +1,6 @@
 """Factory — solo pretrain_ts, pretrain_fc, finetune. Contrastive vive en train_contrastive.py."""
 from pathlib import Path
+import sys
 import torch
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler

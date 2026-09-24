@@ -3,6 +3,7 @@ Modelo Dual-Stream (Doble Flujo)
 Modelo completo que integra TST1, TST2 y el módulo de fusión
 """
 
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -96,6 +97,8 @@ class DualStreamModel(nn.Module):
             attention_weights = None
 
         logits = self.classifier(fused)
+        
+        
 
         result = [logits]
         if return_features:
@@ -103,8 +106,12 @@ class DualStreamModel(nn.Module):
         if return_attention and attention_weights is not None:
             result.append(attention_weights)
 
+        
+
         if len(result) == 1:
             return result[0]
+        
+        
         return tuple(result)
     
 

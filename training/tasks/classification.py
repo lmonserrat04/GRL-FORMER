@@ -25,7 +25,8 @@ class ClassificationTask:
         ts_batch: torch.Tensor,
         pcc_batch: torch.Tensor,
         targets: torch.Tensor,
-    ) -> torch.Tensor:
+        return_logits : bool = False
+    ) -> torch.Tensor | tuple:
         """
         Args:
             model:     DualStreamModel.
@@ -36,12 +37,17 @@ class ClassificationTask:
         Returns:
             loss escalar (CrossEntropy).
         """
+
         ts_batch = ts_batch.to(self.device)
         pcc_batch = pcc_batch.to(self.device)
         targets = targets.to(self.device)
 
         logits = model(ts_batch, pcc_batch)
-        return self.criterion(logits, targets)
+
+        if return_logits: 
+            return logits , self.criterion(logits, targets)
+        else:
+            return self.criterion(logits, targets)
 
 
 # ──────────────────────────────────────────────────────────────────────

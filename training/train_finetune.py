@@ -2,6 +2,7 @@
 Projections congeladas del contrastive global.
 """
 from pathlib import Path
+import sys
 
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ from data.loaders.dataloader import get_finetune_loaders
 from utils.metrics import compute_metrics, aggregate_window_predictions_to_subject_level
 
 
-def train_epoch(model, loader, optimizer, criterion, device):
+def train_epoch(model, loader, optimizer, task, device):
     model.train()
     total = 0.0
     for batch in loader:
@@ -21,16 +22,14 @@ def train_epoch(model, loader, optimizer, criterion, device):
         pcc = batch["pcc_vector"].to(device)
         y = batch["label"].to(device)
         optimizer.zero_grad()
-        logits = model(ts, pcc)
-        loss = criterion(logits, y)
+        loss = task.execution_step(model, ts, pcc, y)
         loss.backward()
         torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
         optimizer.step()
         total += loss.item()
     return total / len(loader)
 
-
-def validate(model, loader, criterion, device):
+def validate(model, loader, task, device):
     model.eval(); total = 0.0
     preds, labels, probs = [], [], []
     with torch.no_grad():
@@ -38,8 +37,8 @@ def validate(model, loader, criterion, device):
             ts = batch["timeseries"].to(device)
             pcc = batch["pcc_vector"].to(device)
             y = batch["label"].to(device)
-            logits = model(ts, pcc)
-            total += criterion(logits, y).item()
+            logits,loss = task.execution_step(model, ts, pcc, y, return_logits = True)
+            total += loss.item()
             p = torch.softmax(logits, dim=1)[:, 1]
             preds.extend(torch.argmax(logits, dim=1).cpu().numpy())
             labels.extend(y.cpu().numpy())
@@ -57,6 +56,7 @@ def finetune_fold(config, fold_idx, save_dir=None):
     )
     
     model = exp.model
+    task = exp.task
     optimizer = exp.optimizer
     scheduler = exp.scheduler
     train_loader = exp.train_loader
@@ -89,8 +89,8 @@ def finetune_fold(config, fold_idx, save_dir=None):
     with tqdm(range(1, epochs + 1), unit="epoch") as tepoch:
         for epoch in tepoch:
             tepoch.set_description(f"Finetune fold {fold_idx} | Epoch {epoch}")
-            tl = train_epoch(model, train_loader, optimizer, criterion, device)
-            vl, vm = validate(model, val_loader, criterion, device)
+            tl = train_epoch(model, train_loader, optimizer, task, device)
+            vl, vm = validate(model, val_loader, task, device)
             scheduler.step()
             auc = vm["auc"]
             tepoch.set_postfix(train=f"{tl:.4f}", val=f"{vl:.4f}", auc=f"{auc:.4f}")
