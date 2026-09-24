@@ -1,12 +1,14 @@
 """Contrastive GLOBAL — paper Sec. 3.3 + README del repo.
 
-Estrategia: freeze TST1, unfreeze TST2 (mejor combinación empírica y del repo).
+Estrategia: freeze TST1, unfreeze TST2.
 InfoNCE τ=0.07, proj 256→128, Adam lr=1e-4 wd=1e-4.
 """
 from pathlib import Path
+
 import torch
 from tqdm import tqdm
-from training.tasks.contrastive import ContrastiveWrapper
+
+from training.tasks.contrastive import ContrastiveTask
 from models.transformer_ts import create_transformer_ts
 from models.transformer_fc import create_transformer_fc
 from data.loaders.dataloader import get_single_split_loaders
@@ -27,43 +29,11 @@ def _tst2_cfg(c):
             "dim_feedforward": t["DIM_FEEDFORWARD"], "dropout": t["ENC_DROP"]}
 
 
-def _train_epoch(tst1, tst2, cm, loader, optimizer, device, trainable):
-    tst1.eval(); tst2.train(); cm.train()
-    tl, ta, n = 0.0, 0.0, 0
-    for batch in loader:
-        ts = batch["timeseries"].to(device)
-        pcc = batch["pcc_vector"].to(device)
-        with torch.no_grad():
-            h_ts = tst1(ts, mode='finetune')
-        h_fc = tst2(pcc, mode='finetune')
-        loss, _, align = cm(h_ts, h_fc)
-
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(trainable, max_norm=1.0)
-        optimizer.step()
-        tl += loss.item(); ta += align.item(); n += 1
-    return tl / max(n, 1), ta / max(n, 1)
-
-
-@torch.no_grad()
-def _validate(tst1, tst2, cm, loader, device):
-    tst1.eval(); tst2.eval(); cm.eval()
-    vl, va, n = 0.0, 0.0, 0
-    for batch in loader:
-        ts = batch["timeseries"].to(device)
-        pcc = batch["pcc_vector"].to(device)
-        h_ts = tst1(ts, mode='finetune')
-        h_fc = tst2(pcc, mode='finetune')
-        loss, _, align = cm(h_ts, h_fc)
-        vl += loss.item(); va += align.item(); n += 1
-    return vl / max(n, 1), va / max(n, 1)
-
 def build_contrastive_components(config, device):
     """
-    Construye y devuelve (tst1, tst2, contrastive_wrapper, trainable_params).
+    Construye (tst1, tst2, task, trainable_params).
 
-    Freezing: TST1 frozen, TST2 unfrozen (paper + repo).
+    Freezing: TST1 frozen, TST2 unfrozen.
     """
     phase = config["T_CONTRASTIVE"]
 
@@ -75,9 +45,10 @@ def build_contrastive_components(config, device):
     if config.get("CKPT_TST2"):
         tst2.load_pretrained(config["CKPT_TST2"], strict=False)
 
-    cm = ContrastiveWrapper(
+    task = ContrastiveTask(
         dim_ts=tst1.emb_dim, dim_fc=tst2.d_model,
-        hidden_dim=phase["PROJ_HIDDEN_DIM"], output_dim=phase["PROJ_OUTPUT_DIM"],
+        hidden_dim=phase["PROJ_HIDDEN_DIM"],
+        output_dim=phase["PROJ_OUTPUT_DIM"],
         temperature=phase["TEMPERATURE"],
     ).to(device)
 
@@ -85,17 +56,50 @@ def build_contrastive_components(config, device):
     for p in tst2.parameters(): p.requires_grad = True
 
     trainable = ([p for p in tst2.parameters() if p.requires_grad]
-                 + list(cm.parameters()))
-    return tst1, tst2, cm, trainable
+                 + list(task.parameters()))
+    return tst1, tst2, task, trainable
 
+
+def _train_epoch(tst1, tst2, task, loader, optimizer, device, trainable):
+    tst1.eval(); tst2.train(); task.train()
+    tl, ta, n = 0.0, 0.0, 0
+    for batch in loader:
+        ts = batch["timeseries"].to(device)
+        pcc = batch["pcc_vector"].to(device)
+
+        with torch.no_grad():
+            h_ts = tst1(ts, mode='finetune')
+        h_fc = tst2(pcc, mode='finetune')
+
+        loss, align = task.execution_step(h_ts, h_fc)
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(trainable, max_norm=1.0)
+        optimizer.step()
+        tl += loss.item(); ta += align.item(); n += 1
+    return tl / max(n, 1), ta / max(n, 1)
+
+
+@torch.no_grad()
+def _validate(tst1, tst2, task, loader, device):
+    tst1.eval(); tst2.eval(); task.eval()
+    vl, va, n = 0.0, 0.0, 0
+    for batch in loader:
+        ts = batch["timeseries"].to(device)
+        pcc = batch["pcc_vector"].to(device)
+        h_ts = tst1(ts, mode='finetune')
+        h_fc = tst2(pcc, mode='finetune')
+        loss, align = task.execution_step(h_ts, h_fc)
+        vl += loss.item(); va += align.item(); n += 1
+    return vl / max(n, 1), va / max(n, 1)
 
 
 def run_contrastive_global(config, save_dir=None):
     device = torch.device(config.get("DEVICE", "cuda" if torch.cuda.is_available() else "cpu"))
     phase = config["T_CONTRASTIVE"]
 
-    # Construcción delegada
-    tst1, tst2, cm, trainable = build_contrastive_components(config, device)
+    tst1, tst2, task, trainable = build_contrastive_components(config, device)
 
     optimizer = torch.optim.Adam(
         trainable, lr=float(phase["LR"]),
@@ -115,15 +119,15 @@ def run_contrastive_global(config, save_dir=None):
     best_state = {
         "tst1": {k: v.detach().cpu().clone() for k, v in tst1.state_dict().items()},
         "tst2": {k: v.detach().cpu().clone() for k, v in tst2.state_dict().items()},
-        "cm":   {k: v.detach().cpu().clone() for k, v in cm.state_dict().items()},
+        "task": {k: v.detach().cpu().clone() for k, v in task.state_dict().items()},
     }
     counter = 0
 
     with tqdm(range(1, epochs + 1), unit="epoch") as tepoch:
         for epoch in tepoch:
             tepoch.set_description(f"Contrastive GLOBAL | Epoch {epoch}")
-            tl, ta = _train_epoch(tst1, tst2, cm, train_loader, optimizer, device, trainable)
-            vl, va = _validate(tst1, tst2, cm, val_loader, device)
+            tl, ta = _train_epoch(tst1, tst2, task, train_loader, optimizer, device, trainable)
+            vl, va = _validate(tst1, tst2, task, val_loader, device)
             tepoch.set_postfix(train=f"{tl:.4f}", val=f"{vl:.4f}",
                                align_tr=f"{ta:.3f}", align_val=f"{va:.3f}")
 
@@ -132,7 +136,7 @@ def run_contrastive_global(config, save_dir=None):
                 best_state = {
                     "tst1": {k: v.detach().cpu().clone() for k, v in tst1.state_dict().items()},
                     "tst2": {k: v.detach().cpu().clone() for k, v in tst2.state_dict().items()},
-                    "cm":   {k: v.detach().cpu().clone() for k, v in cm.state_dict().items()},
+                    "task": {k: v.detach().cpu().clone() for k, v in task.state_dict().items()},
                 }
                 counter = 0
             else:
@@ -144,7 +148,7 @@ def run_contrastive_global(config, save_dir=None):
 
     tst1.load_state_dict(best_state["tst1"])
     tst2.load_state_dict(best_state["tst2"])
-    cm.load_state_dict(best_state["cm"])
+    task.load_state_dict(best_state["task"])
 
     if save_dir is not None:
         save_dir = Path(save_dir); save_dir.mkdir(parents=True, exist_ok=True)
@@ -152,7 +156,7 @@ def run_contrastive_global(config, save_dir=None):
         torch.save({
             "tst1_state_dict":        tst1.state_dict(),
             "tst2_state_dict":        tst2.state_dict(),
-            "proj_head_1_state_dict": cm.proj_ts.state_dict(),
-            "proj_head_2_state_dict": cm.proj_fc.state_dict(),
+            "proj_head_1_state_dict": task.contrastive_module.proj_ts.state_dict(),
+            "proj_head_2_state_dict": task.contrastive_module.proj_fc.state_dict(),
         }, path)
         print(f"  💾 {path}")

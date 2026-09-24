@@ -82,7 +82,6 @@ def finetune_fold(config, fold_idx, save_dir=None):
     )
 
     epochs = phase["N_EPOCHS"]
-    criterion = nn.CrossEntropyLoss()
     patience = phase.get("PATIENCE", 20)
     best_auc, best_state, pc = -1.0, None, 0
 

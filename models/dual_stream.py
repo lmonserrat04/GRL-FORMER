@@ -76,8 +76,8 @@ class DualStreamModel(nn.Module):
         self.classifier = create_mlp_head([fusion_dim] + list(mlp_dims) , dropout, act_name= 'gelu')
 
     def forward(self, timeseries, pcc_vector, return_features=False, return_attention=False):
-        h_ts = self.transformer_ts(timeseries, mode='finetune')
-        h_fc = self.transformer_fc(pcc_vector, mode='finetune')
+        h_ts = self.transformer_ts(timeseries, mode='finetune') #Forward pass en tst 1
+        h_fc = self.transformer_fc(pcc_vector, mode='finetune') #Forward pass en tst 2
 
         # Aplicar projections si están presentes (fine-tuning con projections del paper)
         if self.proj_head_1 is not None:
@@ -96,7 +96,7 @@ class DualStreamModel(nn.Module):
             fused = self.fusion(h_ts, h_fc)
             attention_weights = None
 
-        logits = self.classifier(fused)
+        logits = self.classifier(fused) #Fused es el vector que te interesa para la GRL
         
         
 

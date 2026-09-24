@@ -11,6 +11,8 @@ Criterio: CrossEntropyLoss (Ec. 16 del paper).
 import torch
 import torch.nn as nn
 
+from models.dual_stream import DualStreamModel
+
 
 class ClassificationTask:
     """CrossEntropy sobre los logits del DualStreamModel."""
@@ -21,7 +23,7 @@ class ClassificationTask:
 
     def execution_step(
         self,
-        model: nn.Module,
+        model: DualStreamModel,
         ts_batch: torch.Tensor,
         pcc_batch: torch.Tensor,
         targets: torch.Tensor,
@@ -35,7 +37,7 @@ class ClassificationTask:
             targets:   (B,) etiquetas enteras.
 
         Returns:
-            loss escalar (CrossEntropy).
+            loss escalar (CrossEntropy) y opcionalmente logits.
         """
 
         ts_batch = ts_batch.to(self.device)
