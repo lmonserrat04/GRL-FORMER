@@ -3,6 +3,11 @@ RAW_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200
 INTERP_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp
 CSV_PATH: ./data/csv/data_train.csv
 LOGS_PATH: ./logs/
+
+TEST_MODE : false
+TEST_N_SUBJECTS : 60
+
+
 ATLAS: cc200
 N_ROIS: 200
 TR: 2.0
