@@ -10,6 +10,8 @@ import torch.nn.functional as F
 from .transformer_ts import TransformerTS, create_transformer_ts
 from .transformer_fc import TransformerFC, create_transformer_fc
 from .fusion import create_fusion_module
+from .mlp_head import create_mlp_head
+
 
 
 class DualStreamModel(nn.Module):
@@ -69,17 +71,8 @@ class DualStreamModel(nn.Module):
         self.num_classes = num_classes
 
         fusion_dim = self.fusion.output_dim
-        dims = mlp_dims or [fusion_dim // 2, fusion_dim // 4, num_classes]
-        hidden_dims = dims[:-1]
-        out_dim = dims[-1]
-
-        layers = []
-        prev = fusion_dim
-        for h in hidden_dims:
-            layers += [nn.Linear(prev, h), nn.GELU(), nn.Dropout(dropout)]
-            prev = h
-        layers.append(nn.Linear(prev, out_dim))
-        self.classifier = nn.Sequential(*layers)
+        
+        self.classifier = create_mlp_head([fusion_dim] + list(mlp_dims) , dropout, act_name= 'gelu')
 
     def forward(self, timeseries, pcc_vector, return_features=False, return_attention=False):
         h_ts = self.transformer_ts(timeseries, mode='finetune')
@@ -211,32 +204,18 @@ class DualStreamModelSingleBranch(nn.Module):
         logits = self.classifier(features)
         return logits
 
+
 def create_dual_stream_model(
-    n_rois=200,
-    time_points=100,
-    pcc_dim=19900,
-    tst1_emb_dim=512,
-    tst2_d_model=256,
-    fusion_type='cross_attention',
-    fusion_hidden_dim=None,
-    num_classes=2,
-    dropout=0.1,
-    mlp_dims=None,
+    tst1_config: dict,
+    tst2_config: dict,
+    fusion_type: str = 'attention_pooling',
+    fusion_hidden_dim: int | None = None,
+    num_classes: int = 2,
+    dropout: float = 0.1,
+    mlp_dims: list | None = None,
     proj_head_1=None,
     proj_head_2=None,
 ):
-    tst1_config = {
-        'n_rois': n_rois, 'emb_dim': tst1_emb_dim,
-        'n_heads': 8, 'n_layers': 6, 'dim_feedforward': 2048,
-        'dropout': dropout, 'max_seq_len': time_points,
-        'use_cls_token': True,
-    }
-    tst2_config = {
-        'pcc_dim': pcc_dim, 'd_model': tst2_d_model,
-        'n_heads': 8, 'n_layers': 2, 'dim_feedforward': 512,
-        'dropout': dropout,
-    }
-
     fusion_config = {}
     if fusion_type == "attention_pooling" and fusion_hidden_dim is not None:
         fusion_config["hidden_dim"] = fusion_hidden_dim

@@ -95,22 +95,31 @@ def build_experiment(config, fold_idx=0):
     if exp_type == "finetune":
         phase = config["FINETUNING"]; ds = config["DUAL_STREAM"]
         fh = config.get("FUSION", {}).get("ATTENTION_POOLING", {}).get("HIDDEN_DIM")
+        mlp_classiffier = config.get("MLP_HEAD")
+
         model = create_dual_stream_model(
-            n_rois=config["N_ROIS"], time_points=config["MAX_SEQ_LEN"],
-            pcc_dim=config["TST2"]["PCC_DIM"],
-            tst1_emb_dim=config["TST1"]["D_MODEL"], tst2_d_model=config["TST2"]["D_MODEL"],
-            fusion_type=ds["FUSION_TYPE"], fusion_hidden_dim=fh,
-            num_classes=ds["NUM_CLASSES"], dropout=ds["CLASSIFIER_DROPOUT"],
-            mlp_dims=ds.get("MLP_DIMS"),
+            tst1_config=_tst1_cfg(config),
+            tst2_config= _tst2_cfg(config),
+            fusion_type = ds["FUSION_TYPE"],
+            fusion_hidden_dim = fh,
+            num_classes = ds["NUM_CLASSES"],
+            dropout = mlp_classiffier["DROPOUT"],
+            mlp_dims = list(mlp_classiffier["MLP_DIMS"]),
+            proj_head_1=None,
+            proj_head_2=None,
         ).to(device)
+
+
         if config.get("CKPT_TST1"): model.load_pretrained_tst1(config["CKPT_TST1"], strict=False)
         if config.get("CKPT_TST2"): model.load_pretrained_tst2(config["CKPT_TST2"], strict=False)
         task = ClassificationTask(device)
+
         tr, va, _, _ = get_finetune_loaders(
             config, batch_size=phase["BATCH_SIZE"], num_workers=nw,
             fold_idx=fold_idx, n_folds=config.get("N_FOLDS", 5), seed=seed,
             eval_protocol=config.get("EVAL_PROTOCOL", "kfold"),
         )
+
         opt = build_optimizer(model.parameters(), phase)
         sch = build_scheduler(opt, phase)
         return ExperimentContext(model=model, task=task, optimizer=opt, scheduler=sch,
