@@ -59,15 +59,21 @@ def _validate(tst1, tst2, cm, loader, device):
         vl += loss.item(); va += align.item(); n += 1
     return vl / max(n, 1), va / max(n, 1)
 
+def build_contrastive_components(config, device):
+    """
+    Construye y devuelve (tst1, tst2, contrastive_wrapper, trainable_params).
 
-def run_contrastive_global(config, save_dir=None):
-    device = torch.device(config.get("DEVICE", "cuda" if torch.cuda.is_available() else "cpu"))
+    Freezing: TST1 frozen, TST2 unfrozen (paper + repo).
+    """
     phase = config["T_CONTRASTIVE"]
 
     tst1 = create_transformer_ts(_tst1_cfg(config)).to(device)
     tst2 = create_transformer_fc(_tst2_cfg(config)).to(device)
-    if config.get("CKPT_TST1"): tst1.load_pretrained(config["CKPT_TST1"], strict=False)
-    if config.get("CKPT_TST2"): tst2.load_pretrained(config["CKPT_TST2"], strict=False)
+
+    if config.get("CKPT_TST1"):
+        tst1.load_pretrained(config["CKPT_TST1"], strict=False)
+    if config.get("CKPT_TST2"):
+        tst2.load_pretrained(config["CKPT_TST2"], strict=False)
 
     cm = ContrastiveWrapper(
         dim_ts=tst1.emb_dim, dim_fc=tst2.d_model,
@@ -75,12 +81,22 @@ def run_contrastive_global(config, save_dir=None):
         temperature=phase["TEMPERATURE"],
     ).to(device)
 
-    # freeze TST1, unfreeze TST2 (README del repo + empíricamente mejor)
     for p in tst1.parameters(): p.requires_grad = False
     for p in tst2.parameters(): p.requires_grad = True
 
     trainable = ([p for p in tst2.parameters() if p.requires_grad]
                  + list(cm.parameters()))
+    return tst1, tst2, cm, trainable
+
+
+
+def run_contrastive_global(config, save_dir=None):
+    device = torch.device(config.get("DEVICE", "cuda" if torch.cuda.is_available() else "cpu"))
+    phase = config["T_CONTRASTIVE"]
+
+    # Construcción delegada
+    tst1, tst2, cm, trainable = build_contrastive_components(config, device)
+
     optimizer = torch.optim.Adam(
         trainable, lr=float(phase["LR"]),
         weight_decay=float(phase["WEIGHT_DECAY"]),
@@ -96,9 +112,11 @@ def run_contrastive_global(config, save_dir=None):
     min_delta = phase.get("MIN_DELTA", 1e-4)
 
     best_val = float("inf")
-    best_tst1_state = {k: v.detach().cpu().clone() for k, v in tst1.state_dict().items()}
-    best_tst2_state = {k: v.detach().cpu().clone() for k, v in tst2.state_dict().items()}
-    best_cm_state   = {k: v.detach().cpu().clone() for k, v in cm.state_dict().items()}
+    best_state = {
+        "tst1": {k: v.detach().cpu().clone() for k, v in tst1.state_dict().items()},
+        "tst2": {k: v.detach().cpu().clone() for k, v in tst2.state_dict().items()},
+        "cm":   {k: v.detach().cpu().clone() for k, v in cm.state_dict().items()},
+    }
     counter = 0
 
     with tqdm(range(1, epochs + 1), unit="epoch") as tepoch:
@@ -111,9 +129,11 @@ def run_contrastive_global(config, save_dir=None):
 
             if vl < best_val - min_delta:
                 best_val = vl
-                best_tst1_state = {k: v.detach().cpu().clone() for k, v in tst1.state_dict().items()}
-                best_tst2_state = {k: v.detach().cpu().clone() for k, v in tst2.state_dict().items()}
-                best_cm_state   = {k: v.detach().cpu().clone() for k, v in cm.state_dict().items()}
+                best_state = {
+                    "tst1": {k: v.detach().cpu().clone() for k, v in tst1.state_dict().items()},
+                    "tst2": {k: v.detach().cpu().clone() for k, v in tst2.state_dict().items()},
+                    "cm":   {k: v.detach().cpu().clone() for k, v in cm.state_dict().items()},
+                }
                 counter = 0
             else:
                 counter += 1
@@ -122,9 +142,9 @@ def run_contrastive_global(config, save_dir=None):
                                f"(best val={best_val:.4f})")
                     break
 
-    tst1.load_state_dict(best_tst1_state)
-    tst2.load_state_dict(best_tst2_state)
-    cm.load_state_dict(best_cm_state)
+    tst1.load_state_dict(best_state["tst1"])
+    tst2.load_state_dict(best_state["tst2"])
+    cm.load_state_dict(best_state["cm"])
 
     if save_dir is not None:
         save_dir = Path(save_dir); save_dir.mkdir(parents=True, exist_ok=True)
