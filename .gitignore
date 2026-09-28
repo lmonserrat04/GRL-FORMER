@@ -10,4 +10,4 @@ test/
 smoke_grl.py
 test_pipeline.py
 .hypothesis/
-experiments_sweep_*/
+experiments_*/

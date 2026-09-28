@@ -106,17 +106,21 @@ def finetune_fold(config, fold_idx, save_dir=None):
 
     use_schedule = bool(phase.get("GRL_SCHEDULE", False))
     gamma = float(phase.get("GRL_GAMMA", 10.0))
+    warmup = int(phase.get("GRL_WARMUP", 0))
     total_epochs = phase["N_EPOCHS"]
     print(f"  GRL: {'schedule' if use_schedule else 'fijo'} "
-          f"(lambda_0={model.grl_lambda:.3f}, gamma={gamma})")
+          f"(lambda_0={model.grl_lambda:.3f}, gamma={gamma}, warmup={warmup})")
 
     with tqdm(range(1, epochs + 1), unit="epoch") as tepoch:
         for epoch in tepoch:
             tepoch.set_description(f"Finetune fold {fold_idx} | Epoch {epoch}")
 
             if use_schedule:
-                progress = (epoch - 1) / max(total_epochs - 1, 1)
-                model.grl_lambda = ganin_lambda(progress, gamma=gamma)
+                if epoch <= warmup:
+                    model.grl_lambda = 0.0
+                else:
+                    progress = (epoch - warmup - 1) / max(total_epochs - warmup - 1, 1)
+                    model.grl_lambda = ganin_lambda(progress, gamma=gamma)
 
             tl = train_epoch(model, train_loader, optimizer, task, device)
             vl, vm = validate(model, val_loader, task, device)
