@@ -92,7 +92,7 @@ class DualStreamModel(nn.Module):
             act_name="relu",
         )
 
-    def forward(self, timeseries, pcc_vector,*, return_domain_logits: bool = True, return_features=False, return_attention=False):
+    def forward(self, timeseries, pcc_vector,*, return_domain_logits: bool = False, return_features=False, return_attention=False):
         h_ts = self.transformer_ts(timeseries, mode='finetune')
         h_fc = self.transformer_fc(pcc_vector, mode='finetune')
 

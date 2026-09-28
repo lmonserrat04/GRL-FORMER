@@ -145,9 +145,9 @@ def finetune_fold(config, fold_idx, save_dir=None):
             ts = batch["timeseries"].to(device)
             pcc = batch["pcc_vector"].to(device)
             y = batch["label"].to(device)
-            logits = model(ts, pcc)
-            probs.extend(torch.softmax(logits, dim=1)[:, 1].cpu().numpy())
-            preds.extend(torch.argmax(logits, dim=1).cpu().numpy())
+            tag_logits = model(ts, pcc, return_domain_logits=False)   # ← explícito
+            probs.extend(torch.softmax(tag_logits, dim=1)[:, 1].cpu().numpy())
+            preds.extend(torch.argmax(tag_logits, dim=1).cpu().numpy())
             labels.extend(y.cpu().numpy())
 
     si = split_info["subject_indices"]; ti = split_info["test_idx"]
