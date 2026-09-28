@@ -110,6 +110,7 @@ FINETUNING:
   GRL_LAMBDA: 1.0          # valor inicial (se sobreescribe por schedule si GRL_SCHEDULE=true)
   GRL_SCHEDULE: true       # true → usar ganin_lambda por epoch
   GRL_GAMMA: 10.0 
+  DOMAIN_WEIGHT: 1.0 
 
 CHECKPOINTS:
   PT_TS: best_pt_ts_model

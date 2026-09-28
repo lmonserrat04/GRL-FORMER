@@ -157,12 +157,13 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
             fusion_type=ds["FUSION_TYPE"],
             fusion_hidden_dim=fh,
             num_classes=ds["NUM_CLASSES"],
-            num_domains=num_domains,                                 # ← nuevo
+            num_domains=num_domains,
             dropout=mlp_classiffier["DROPOUT"],
             mlp_dims=mlp_classiffier["MLP_DIMS"],
             proj_head_1=p1,
             proj_head_2=p2,
             grl_lambda=float(phase.get("GRL_LAMBDA", 1.0)),
+            domain_weight=float(phase.get("DOMAIN_WEIGHT", 1.0)),   # ← nuevo
         ).to(device)
 
 

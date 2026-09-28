@@ -34,12 +34,13 @@ class DualStreamModel(nn.Module):
         fusion_type='cross_attention',
         fusion_config=None,
         num_classes=2,
-        num_domains=20,          # ← nuevo
+        num_domains=20,
         dropout=0.1,
         mlp_dims=None,
         proj_head_1=None,
         proj_head_2=None,
-        grl_lambda=1.0,          # ← nuevo
+        grl_lambda=1.0,
+        domain_weight=1.0,        # ← nuevo
     ):
         """
         Args:
@@ -76,6 +77,7 @@ class DualStreamModel(nn.Module):
 
         fusion_dim = self.fusion.output_dim
         self.grl_lambda : float = float(grl_lambda)
+        self._domain_weight = float(domain_weight)
 
         
         # Capas ocultas compartidas; solo cambia la última capa (salida)
@@ -233,12 +235,13 @@ def create_dual_stream_model(
     fusion_type: str = "attention_pooling",
     fusion_hidden_dim: int | None = None,
     num_classes: int = 2,
-    num_domains: int = 20,       # ← nuevo
+    num_domains: int = 20,
     dropout: float = 0.1,
     mlp_dims: list | None = None,
     proj_head_1=None,
     proj_head_2=None,
-    grl_lambda: float = 1.0,     # ← nuevo
+    grl_lambda: float = 1.0,
+    domain_weight: float = 1.0,      # ← nuevo
 ):
     
     fusion_config = {}
@@ -251,10 +254,11 @@ def create_dual_stream_model(
         fusion_type=fusion_type,
         fusion_config=fusion_config,
         num_classes=num_classes,
-        num_domains=num_domains,     # ← pasar
+        num_domains=num_domains,
         dropout=dropout,
         mlp_dims=mlp_dims,
         proj_head_1=proj_head_1,
         proj_head_2=proj_head_2,
-        grl_lambda=grl_lambda,       # ← pasar
+        grl_lambda=grl_lambda,
+        domain_weight=domain_weight,     # ← nuevo
     )
