@@ -135,6 +135,9 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
         ds = config["DUAL_STREAM"]
         fh = config.get("FUSION", {}).get("ATTENTION_POOLING", {}).get("HIDDEN_DIM")
         mlp_classiffier = config.get("MLP_HEAD")
+        # Derivar N_SITES del CSV (evita hardcodear)
+        import pandas as pd
+        n_sites = pd.read_csv(config["CSV_PATH"])["SITE_ID"].nunique()
 
         # Projections congeladas (si se pasa ckpt contrastive)
         if ckpt_contrastive is not None:
@@ -142,16 +145,20 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
         else:
             p1, p2 = None, None
 
+        
+        
         model = create_dual_stream_model(
             tst1_config=_tst1_cfg(config),
-            tst2_config= _tst2_cfg(config),
-            fusion_type = ds["FUSION_TYPE"],
-            fusion_hidden_dim = fh,
-            num_classes = ds["NUM_CLASSES"],
-            dropout = mlp_classiffier["DROPOUT"],
-            mlp_dims = list(mlp_classiffier["MLP_DIMS"]),
+            tst2_config=_tst2_cfg(config),
+            fusion_type=ds["FUSION_TYPE"],
+            fusion_hidden_dim=fh,
+            num_classes=ds["NUM_CLASSES"],
+            num_domains=n_sites,                                  # ← del CSV
+            dropout=mlp_classiffier["DROPOUT"],
+            mlp_dims=mlp_classiffier["MLP_DIMS"],
             proj_head_1=p1,
             proj_head_2=p2,
+            grl_lambda=float(phase.get("GRL_LAMBDA", 1.0)),
         ).to(device)
 
 
