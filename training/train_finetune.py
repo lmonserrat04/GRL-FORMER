@@ -12,6 +12,7 @@ from tqdm import tqdm
 from training.setup import build_experiment
 from data.loaders.dataloader import get_finetune_loaders
 from utils.metrics import compute_metrics, aggregate_window_predictions_to_subject_level
+from models.grl import ganin_lambda
 
 
 def train_epoch(model, loader, optimizer, task, device):
@@ -20,30 +21,48 @@ def train_epoch(model, loader, optimizer, task, device):
     for batch in loader:
         ts = batch["timeseries"].to(device)
         pcc = batch["pcc_vector"].to(device)
-        tag_targets = batch["label"].to(device)
+        y = batch["label"].to(device)
+        site = batch["site_id"].to(device)
+
         optimizer.zero_grad()
-        tag_loss,domain_loss = task.execution_step(model, ts, pcc, tag_targets)
-        tag_loss.backward()
-        torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
+        tag_loss, domain_loss = task.execution_step(
+            model, ts, pcc, y, domain_targets=site,
+        )
+        loss = tag_loss + domain_loss
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            [p for p in model.parameters() if p.requires_grad], 1.0)
         optimizer.step()
-        total += tag_loss.item()
+        total += loss.item()
     return total / len(loader)
 
+
 def validate(model, loader, task, device):
-    model.eval(); total = 0.0
+    model.eval()
+    total = 0.0
     preds, labels, probs = [], [], []
     with torch.no_grad():
         for batch in loader:
             ts = batch["timeseries"].to(device)
             pcc = batch["pcc_vector"].to(device)
             y = batch["label"].to(device)
-            logits,loss = task.execution_step(model, ts, pcc, y, return_logits = True)
-            total += loss.item()
-            p = torch.softmax(logits, dim=1)[:, 1]
-            preds.extend(torch.argmax(logits, dim=1).cpu().numpy())
+            site = batch["site_id"].to(device)
+
+            tag_logits, tag_loss, domain_loss = task.execution_step(
+                model, ts, pcc, y,
+                domain_targets=site,
+                return_tag_logits=True,
+            )
+            total += (tag_loss + domain_loss).item()
+
+            p = torch.softmax(tag_logits, dim=1)[:, 1]
+            preds.extend(torch.argmax(tag_logits, dim=1).cpu().numpy())
             labels.extend(y.cpu().numpy())
             probs.extend(p.cpu().numpy())
-    return total / len(loader), compute_metrics(np.array(labels), np.array(preds), np.array(probs))
+
+    return total / len(loader), compute_metrics(
+        np.array(labels), np.array(preds), np.array(probs)
+    )
 
 
 def finetune_fold(config, fold_idx, save_dir=None):
@@ -84,10 +103,23 @@ def finetune_fold(config, fold_idx, save_dir=None):
     epochs = phase["N_EPOCHS"]
     patience = phase.get("PATIENCE", 20)
     best_auc, best_state, pc = -1.0, None, 0
+    
+    # ─── GRL schedule setup ─────────────────────────────────────────
+    use_schedule = bool(phase.get("GRL_SCHEDULE", False))
+    gamma = float(phase.get("GRL_GAMMA", 10.0))
+    total_epochs = phase["N_EPOCHS"]
+    print(f"  GRL: {'schedule' if use_schedule else 'fijo'} "
+          f"(lambda_0={model.grl_lambda:.3f}, gamma={gamma})")
 
     with tqdm(range(1, epochs + 1), unit="epoch") as tepoch:
         for epoch in tepoch:
             tepoch.set_description(f"Finetune fold {fold_idx} | Epoch {epoch}")
+
+            # Actualizar lambda del schedule
+            if use_schedule:
+                progress = (epoch - 1) / max(total_epochs - 1, 1)
+                model.grl_lambda = ganin_lambda(progress, gamma=gamma)
+
             tl = train_epoch(model, train_loader, optimizer, task, device)
             vl, vm = validate(model, val_loader, task, device)
             scheduler.step()

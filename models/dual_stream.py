@@ -75,10 +75,22 @@ class DualStreamModel(nn.Module):
         self.num_classes = num_classes
 
         fusion_dim = self.fusion.output_dim
-        self.grl_lambda = float(grl_lambda)
+        self.grl_lambda : float = float(grl_lambda)
 
-        self.tag_classifier = create_mlp_head([fusion_dim] + list(mlp_dims) , dropout, act_name= 'gelu')
-        self.domain_classifier = create_mlp_head([fusion_dim] + list(mlp_dims) , dropout, act_name= 'relu')
+        
+        # Capas ocultas compartidas; solo cambia la última capa (salida)
+        hidden = list(mlp_dims)[:-1]              # [256, 64]
+
+        self.tag_classifier = create_mlp_head(
+            [fusion_dim] + hidden + [num_classes],
+            dropout,
+            act_name="gelu",
+        )
+        self.domain_classifier = create_mlp_head(
+            [fusion_dim] + hidden + [num_domains],
+            dropout,
+            act_name="relu",
+        )
 
     def forward(self, timeseries, pcc_vector,*, return_domain_logits: bool = True, return_features=False, return_attention=False):
         h_ts = self.transformer_ts(timeseries, mode='finetune')

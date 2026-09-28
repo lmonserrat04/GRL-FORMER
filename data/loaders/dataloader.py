@@ -125,13 +125,20 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
     if not ts_list:
         raise RuntimeError(f"No se cargó ningún .1D de {root}")
 
+
+    # Mapeo estable sitio → índice entero (para CrossEntropy en domain)
+    unique_sites = sorted(set(sites))
+    site_to_idx = {s: i for i, s in enumerate(unique_sites)}
+
     data = {
         "timeseries":      np.stack(ts_list).astype(np.float32),
         "pcc_vectors":     np.stack(pcc_list).astype(np.float32),
         "labels":          np.array(labels, dtype=np.int64),
         "subject_indices": np.array(subj_ids, dtype=np.int64),
         "site_ids":        np.array(sites),
+        "site_to_idx":     site_to_idx,          # ← nuevo
     }
+    
     print(f"Cargados {len(labels)} sujetos  |  "
           f"ts={data['timeseries'].shape}  pcc={data['pcc_vectors'].shape}")
     _DATA_CACHE[cache_key] = data
@@ -140,10 +147,19 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
 
 class TwoTSTDataset(Dataset):
     def __init__(self, timeseries, pcc_vectors, labels,
-                 normalize_ts=True, normalize_pcc=True):
+             site_ids=None, site_to_idx=None,
+             normalize_ts=True, normalize_pcc=True):
         self.timeseries = timeseries.astype(np.float32)
         self.pcc_vectors = pcc_vectors.astype(np.float32)
         self.labels = labels.astype(np.int64)
+
+        # Domain labels (sitios)
+        if site_ids is not None and site_to_idx is not None:
+            self.site_ids = np.array(
+                [site_to_idx[s] for s in site_ids], dtype=np.int64
+            )
+        else:
+            self.site_ids = None
 
         if normalize_ts:
             mean = self.timeseries.mean(axis=(1, 2), keepdims=True)
@@ -159,11 +175,14 @@ class TwoTSTDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        return {
+        item = {
             "timeseries": torch.from_numpy(self.timeseries[idx]),
             "pcc_vector": torch.from_numpy(self.pcc_vectors[idx]),
             "label":      torch.tensor(self.labels[idx], dtype=torch.long),
         }
+        if self.site_ids is not None:
+            item["site_id"] = torch.tensor(self.site_ids[idx], dtype=torch.long)
+        return item
 
 
 class PretrainTSDataset(Dataset):
@@ -264,9 +283,21 @@ def get_finetune_loaders(
 
     ts, pcc = data["timeseries"], data["pcc_vectors"]
 
-    train_ds = TwoTSTDataset(ts[train_idx], pcc[train_idx], labels[train_idx])
-    val_ds   = TwoTSTDataset(ts[val_idx],   pcc[val_idx],   labels[val_idx])
-    test_ds  = TwoTSTDataset(ts[test_idx],  pcc[test_idx],  labels[test_idx])
+    site_ids = data["site_ids"]
+    site_to_idx = data["site_to_idx"]
+
+    train_ds = TwoTSTDataset(
+        ts[train_idx], pcc[train_idx], labels[train_idx],
+        site_ids=site_ids[train_idx], site_to_idx=site_to_idx,
+    )
+    val_ds = TwoTSTDataset(
+        ts[val_idx], pcc[val_idx], labels[val_idx],
+        site_ids=site_ids[val_idx], site_to_idx=site_to_idx,
+    )
+    test_ds = TwoTSTDataset(
+        ts[test_idx], pcc[test_idx], labels[test_idx],
+        site_ids=site_ids[test_idx], site_to_idx=site_to_idx,
+    )
 
     pin = torch.cuda.is_available()
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,

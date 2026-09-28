@@ -7,6 +7,6 @@ experiments_test/
 .vscode/
 data/sintetic
 test/
-inspect_T.py
+smoke_grl.py
 test_pipeline.py
 .hypothesis/

@@ -145,6 +145,10 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
         else:
             p1, p2 = None, None
 
+        from data.loaders.dataloader import load_raw_data
+        data = load_raw_data(config)
+        num_domains = len(data["site_to_idx"])
+        print(f"  num_domains (sitios únicos): {num_domains}")
         
         
         model = create_dual_stream_model(
@@ -153,7 +157,7 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
             fusion_type=ds["FUSION_TYPE"],
             fusion_hidden_dim=fh,
             num_classes=ds["NUM_CLASSES"],
-            num_domains=n_sites,                                  # ← del CSV
+            num_domains=num_domains,                                 # ← nuevo
             dropout=mlp_classiffier["DROPOUT"],
             mlp_dims=mlp_classiffier["MLP_DIMS"],
             proj_head_1=p1,
