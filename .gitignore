@@ -8,6 +8,8 @@ experiments_test/
 data/sintetic
 inspect_T.py
 test_pipeline.py
+test/
+
 # --- Locales: experimentos y datasets pesados (no versionar) ---
 experiments_*/
 data/datasets/ABIDE_pcp/cpac/
