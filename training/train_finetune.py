@@ -1,8 +1,8 @@
 """Finetune — usa build_experiment con ckpt_contrastive.
 Projections congeladas del contrastive global.
+Guarda predicciones crudas (labels, probs, umbral óptimo) por fold.
 """
 from pathlib import Path
-import sys
 
 import numpy as np
 import torch
@@ -70,12 +70,11 @@ def validate(model, loader, task, device):
 def finetune_fold(config, fold_idx, save_dir=None):
     config["EXPERIMENT_TYPE"] = "finetune"
 
-    # ─── Todo el modelo lo construye la factory ──────────────────────
     exp = build_experiment(
         config, fold_idx=fold_idx,
         ckpt_contrastive=config.get("CKPT_CONTRASTIVE"),
     )
-    
+
     model = exp.model
     task = exp.task
     optimizer = exp.optimizer
@@ -92,7 +91,6 @@ def finetune_fold(config, fold_idx, save_dir=None):
     print(f"\n── Finetune fold {fold_idx} ──")
     print(f"  Trainable: {sum(p.numel() for p in trainable):,}/{total_p:,}")
 
-    # ─── Test loader (la factory solo devuelve train/val) ────────────
     phase = config["FINETUNING"]
     _, _, test_loader, split_info = get_finetune_loaders(
         config, batch_size=phase["BATCH_SIZE"],
@@ -105,8 +103,7 @@ def finetune_fold(config, fold_idx, save_dir=None):
     epochs = phase["N_EPOCHS"]
     patience = phase.get("PATIENCE", 20)
     best_auc, best_state, pc = -1.0, None, 0
-    
-    # ─── GRL schedule setup ─────────────────────────────────────────
+
     use_schedule = bool(phase.get("GRL_SCHEDULE", False))
     gamma = float(phase.get("GRL_GAMMA", 10.0))
     total_epochs = phase["N_EPOCHS"]
@@ -117,7 +114,6 @@ def finetune_fold(config, fold_idx, save_dir=None):
         for epoch in tepoch:
             tepoch.set_description(f"Finetune fold {fold_idx} | Epoch {epoch}")
 
-            # Actualizar lambda del schedule
             if use_schedule:
                 progress = (epoch - 1) / max(total_epochs - 1, 1)
                 model.grl_lambda = ganin_lambda(progress, gamma=gamma)
@@ -137,9 +133,10 @@ def finetune_fold(config, fold_idx, save_dir=None):
                     tqdm.write(f"  ⏹ Early stopping epoch {epoch} (best AUC={best_auc:.4f})")
                     break
 
-    if best_state: model.load_state_dict(best_state)
+    if best_state:
+        model.load_state_dict(best_state)
 
-        # ─── Recolectar predicciones en VAL (para umbral óptimo) ─────────
+    # ─── Predicciones en VAL para umbral óptimo ──────────────────────
     model.eval()
     val_labels, val_probs = [], []
     with torch.no_grad():
@@ -160,7 +157,6 @@ def finetune_fold(config, fold_idx, save_dir=None):
     val_labels = np.array(val_labels)
     val_probs = np.array(val_probs)
 
-    # Umbral óptimo por Youden's J sobre validación
     from sklearn.metrics import roc_curve
     if len(np.unique(val_labels)) > 1:
         fpr, tpr, thr = roc_curve(val_labels, val_probs)
@@ -186,15 +182,15 @@ def finetune_fold(config, fold_idx, save_dir=None):
     probs = np.array(probs)
     preds = np.array(preds)
 
-    # ─── Guardar predicciones crudas para análisis posterior ─────────
+    # ─── Guardar predicciones crudas ─────────────────────────────────
     if save_dir is not None:
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
         np.savez(
             save_dir / f"preds_fold_{fold_idx}.npz",
-            labels=labels,              # window-level, enteros 0/1
-            probs=probs,                # window-level, P(ASD)
-            preds=preds,                # window-level, umbral 0.5
+            labels=labels,
+            probs=probs,
+            preds=preds,
             val_labels=val_labels,
             val_probs=val_probs,
             optimal_thr=np.array([optimal_thr]),
