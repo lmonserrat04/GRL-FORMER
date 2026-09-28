@@ -9,3 +9,4 @@ data/sintetic
 test/
 inspect_T.py
 test_pipeline.py
+.hypothesis/
