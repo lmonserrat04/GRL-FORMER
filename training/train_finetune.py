@@ -20,13 +20,13 @@ def train_epoch(model, loader, optimizer, task, device):
     for batch in loader:
         ts = batch["timeseries"].to(device)
         pcc = batch["pcc_vector"].to(device)
-        y = batch["label"].to(device)
+        tag_targets = batch["label"].to(device)
         optimizer.zero_grad()
-        loss = task.execution_step(model, ts, pcc, y)
-        loss.backward()
+        tag_loss,domain_loss = task.execution_step(model, ts, pcc, tag_targets)
+        tag_loss.backward()
         torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
         optimizer.step()
-        total += loss.item()
+        total += tag_loss.item()
     return total / len(loader)
 
 def validate(model, loader, task, device):

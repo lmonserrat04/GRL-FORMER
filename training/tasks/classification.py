@@ -21,36 +21,110 @@ class ClassificationTask:
         self.device = device
         self.criterion = nn.CrossEntropyLoss()
 
+
     def execution_step(
         self,
         model: DualStreamModel,
         ts_batch: torch.Tensor,
         pcc_batch: torch.Tensor,
-        targets: torch.Tensor,
-        return_logits : bool = False
-    ) -> torch.Tensor | tuple:
+        tag_targets: torch.Tensor,
+        domain_targets: torch.Tensor | None = None,
+        return_tag_logits: bool = False,
+        return_domain_logits: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, ...]:
         """
+        Ejecuta un paso de forward + cálculo de pérdidas para DualStreamModel.
+
         Args:
-            model:     DualStreamModel.
-            ts_batch:  (B, T, R) series temporales.
-            pcc_batch: (B, D) vectores PCC.
-            targets:   (B,) etiquetas enteras.
+            model:
+                Modelo DualStreamModel.
+            ts_batch:
+                Tensor (B, T, R) con series temporales.
+            pcc_batch:
+                Tensor (B, D) con vectores PCC.
+            tag_targets:
+                Tensor (B,2) con etiquetas enteras para clasificación de tag/diagnóstico.
+            domain_targets:
+                Tensor (B,N_SITES) con etiquetas enteras para clasificación de dominio/sitio.
+                Si es None, no se calcula pérdida de dominio.
+            return_tag_logits:
+                Si es True, incluye los logits de tag en la salida.
+            return_domain_logits:
+                Si es True, incluye los logits de dominio en la salida.
+                Requiere que domain_targets no sea None; en caso contrario
+                se lanza ValueError.
 
         Returns:
-            loss escalar (CrossEntropy) y opcionalmente logits.
+            Dependiendo de los flags y de si hay domain_targets, retorna:
+            - tag_loss (Tensor escalar) si no se pide nada más.
+            - (tag_logits, tag_loss) si return_tag_logits=True y no hay domain_targets.
+            - (tag_loss, domain_loss) si hay domain_targets y no se piden logits.
+            - (tag_logits, tag_loss, domain_loss) si return_tag_logits=True y hay domain_targets.
+            - (tag_loss, domain_loss, domain_logits) si return_domain_logits=True.
+            - (tag_logits, tag_loss, domain_loss, domain_logits) si ambos flags son True.
+
+            Orden de la tupla:
+                (tag_logits?, tag_loss, domain_loss?, domain_logits?)
+            donde '?' indica que el elemento solo aparece si se solicita.
+
+        Raises:
+            ValueError:
+                Si return_domain_logits=True y domain_targets es None.
         """
+        if return_domain_logits and domain_targets is None:
+            raise ValueError(
+                "return_domain_logits=True requiere domain_targets; "
+                "no tiene sentido devolver logits de dominio sin etiquetas de dominio."
+            )
 
         ts_batch = ts_batch.to(self.device)
         pcc_batch = pcc_batch.to(self.device)
-        targets = targets.to(self.device)
+        tag_targets = tag_targets.to(self.device)
 
-        logits = model(ts_batch, pcc_batch)
+        if domain_targets is not None:
+            domain_targets = domain_targets.to(self.device)
 
-        if return_logits: 
-            return logits , self.criterion(logits, targets)
+        need_domain_logits = domain_targets is not None
+
+        if need_domain_logits:
+            tag_logits, domain_logits = model(
+                ts_batch,
+                pcc_batch,
+                return_domain_logits=True,
+            )
         else:
-            return self.criterion(logits, targets)
+            tag_logits = model(
+                ts_batch,
+                pcc_batch,
+                return_domain_logits=False,
+            )
+            domain_logits = None
 
+        tag_loss = self.criterion(tag_logits, tag_targets)
+
+        outputs: list[torch.Tensor] = []
+
+        if return_tag_logits:
+            outputs.append(tag_logits)
+
+        outputs.append(tag_loss)
+
+        if domain_targets is not None:
+            domain_loss = self.criterion(domain_logits, domain_targets)
+            outputs.append(domain_loss)
+
+        if return_domain_logits:
+            outputs.append(domain_logits)
+
+        return outputs[0] if len(outputs) == 1 else tuple(outputs)
+
+
+            
+            
+
+
+        
+   
 
 # ──────────────────────────────────────────────────────────────────────
 # Tests
@@ -79,7 +153,7 @@ if __name__ == "__main__":
     ts = torch.randn(B, T, R)
     pcc = torch.randn(B, D)
     y = torch.randint(0, 2, (B,))
-    loss = task.execution_step(DummyDualStream(), ts, pcc, y)
+    loss = task.domain_execution_step(DummyDualStream(), ts, pcc, y)
     assert loss.dim() == 0
     assert loss.item() > 0
     print(f"  ✓ loss={loss.item():.4f}\n")
@@ -98,13 +172,13 @@ if __name__ == "__main__":
     # Logits muy confiados y correctos
     y = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1])
     logits_perfect = torch.tensor([[10.0, -10.0], [-10.0, 10.0]] * 4)
-    loss_perfect = task.execution_step(
+    loss_perfect = task.domain_execution_step(
         FixedLogits(logits_perfect), ts[:len(y)], pcc[:len(y)], y
     )
 
     # Logits al azar
     logits_random = torch.randn(len(y), 2)
-    loss_random = task.execution_step(
+    loss_random = task.domain_execution_step(
         FixedLogits(logits_random), ts[:len(y)], pcc[:len(y)], y
     )
     assert loss_perfect.item() < loss_random.item()
@@ -124,7 +198,7 @@ if __name__ == "__main__":
             return torch.stack([s, -s], dim=1)
 
     m = LearnableModel()
-    loss = task.execution_step(m, ts, pcc, y)
+    loss = task.domain_execution_step(m, ts, pcc, y)
     loss.backward()
     assert m.scale.grad is not None and m.scale.grad.abs().item() > 0
     print(f"  ✓ gradiente fluye, grad={m.scale.grad.item():.4f}\n")
@@ -138,7 +212,7 @@ if __name__ == "__main__":
     losses = []
     for _ in range(20):
         optimizer.zero_grad()
-        loss = task.execution_step(m, ts, pcc, y)
+        loss = task.domain_execution_step(m, ts, pcc, y)
         loss.backward()
         optimizer.step()
         losses.append(loss.item())

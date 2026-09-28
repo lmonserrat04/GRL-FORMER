@@ -6,5 +6,6 @@ experiments/
 experiments_test/
 .vscode/
 data/sintetic
+test/
 inspect_T.py
 test_pipeline.py

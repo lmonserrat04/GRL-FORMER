@@ -9,6 +9,7 @@ LOGS_PATH: ./logs/
 
 ATLAS: cc200
 N_ROIS: 200
+N_SITES: 20                # número de sitios (ABIDE ~20)
 TR: 2.0
 PREFIX: interp_
 MIN_TIMESTEPS: 116
@@ -107,6 +108,9 @@ FINETUNING:
     eta_min: 5e-7
   PATIENCE: 20
   MIN_DELTA: 0.001
+  GRL_LAMBDA: 1.0          # valor inicial (se sobreescribe por schedule si GRL_SCHEDULE=true)
+  GRL_SCHEDULE: true       # true → usar ganin_lambda por epoch
+  GRL_GAMMA: 10.0 
 
 CHECKPOINTS:
   PT_TS: best_pt_ts_model

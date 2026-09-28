@@ -12,6 +12,7 @@ from .transformer_ts import TransformerTS, create_transformer_ts
 from .transformer_fc import TransformerFC, create_transformer_fc
 from .fusion import create_fusion_module
 from .mlp_head import create_mlp_head
+from .grl import grad_reverse
 
 
 
@@ -33,10 +34,12 @@ class DualStreamModel(nn.Module):
         fusion_type='cross_attention',
         fusion_config=None,
         num_classes=2,
+        num_domains=20,          # ← nuevo
         dropout=0.1,
         mlp_dims=None,
         proj_head_1=None,
         proj_head_2=None,
+        grl_lambda=1.0,          # ← nuevo
     ):
         """
         Args:
@@ -72,12 +75,14 @@ class DualStreamModel(nn.Module):
         self.num_classes = num_classes
 
         fusion_dim = self.fusion.output_dim
-        
-        self.classifier = create_mlp_head([fusion_dim] + list(mlp_dims) , dropout, act_name= 'gelu')
+        self.grl_lambda = float(grl_lambda)
 
-    def forward(self, timeseries, pcc_vector, return_features=False, return_attention=False):
-        h_ts = self.transformer_ts(timeseries, mode='finetune') #Forward pass en tst 1
-        h_fc = self.transformer_fc(pcc_vector, mode='finetune') #Forward pass en tst 2
+        self.tag_classifier = create_mlp_head([fusion_dim] + list(mlp_dims) , dropout, act_name= 'gelu')
+        self.domain_classifier = create_mlp_head([fusion_dim] + list(mlp_dims) , dropout, act_name= 'relu')
+
+    def forward(self, timeseries, pcc_vector,*, return_domain_logits: bool = True, return_features=False, return_attention=False):
+        h_ts = self.transformer_ts(timeseries, mode='finetune')
+        h_fc = self.transformer_fc(pcc_vector, mode='finetune')
 
         # Aplicar projections si están presentes (fine-tuning con projections del paper)
         if self.proj_head_1 is not None:
@@ -96,24 +101,22 @@ class DualStreamModel(nn.Module):
             fused = self.fusion(h_ts, h_fc)
             attention_weights = None
 
-        logits = self.classifier(fused) #Fused es el vector que te interesa para la GRL
-        
-        
+        # tag_classifier: sin GRL (queremos que fused sea discriminativo para tag)
+        tag_logits = self.tag_classifier(fused)
 
-        result = [logits]
-        if return_features:
-            result.extend([fused, h_ts, h_fc])
-        if return_attention and attention_weights is not None:
-            result.append(attention_weights)
+        # domain_classifier: CON GRL (queremos que fused sea invariante al dominio)
+        domain_logits = self.domain_classifier(grad_reverse(fused, lambda_=self.grl_lambda))
 
-        
+        # if return_features:
+        #     result.extend([fused, h_ts, h_fc])
+        # if return_attention and attention_weights is not None:
+        #     result.append(attention_weights)
 
-        if len(result) == 1:
-            return result[0]
-        
-        
-        return tuple(result)
-    
+        if return_domain_logits:
+            return tag_logits, domain_logits
+        else:
+            return tag_logits
+
 
     def get_features(self, timeseries, pcc_vector):
         """
@@ -215,14 +218,17 @@ class DualStreamModelSingleBranch(nn.Module):
 def create_dual_stream_model(
     tst1_config: dict,
     tst2_config: dict,
-    fusion_type: str = 'attention_pooling',
+    fusion_type: str = "attention_pooling",
     fusion_hidden_dim: int | None = None,
     num_classes: int = 2,
+    num_domains: int = 20,       # ← nuevo
     dropout: float = 0.1,
     mlp_dims: list | None = None,
     proj_head_1=None,
     proj_head_2=None,
+    grl_lambda: float = 1.0,     # ← nuevo
 ):
+    
     fusion_config = {}
     if fusion_type == "attention_pooling" and fusion_hidden_dim is not None:
         fusion_config["hidden_dim"] = fusion_hidden_dim
@@ -233,8 +239,10 @@ def create_dual_stream_model(
         fusion_type=fusion_type,
         fusion_config=fusion_config,
         num_classes=num_classes,
+        num_domains=num_domains,     # ← pasar
         dropout=dropout,
         mlp_dims=mlp_dims,
         proj_head_1=proj_head_1,
         proj_head_2=proj_head_2,
+        grl_lambda=grl_lambda,       # ← pasar
     )
