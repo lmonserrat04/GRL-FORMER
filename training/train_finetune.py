@@ -30,7 +30,7 @@ def train_epoch(model, loader, optimizer, task, device):
         )
         w = model._domain_weight if hasattr(model, "_domain_weight") else 1.0
         loss = tag_loss + w * domain_loss
-        
+
         loss.backward()
         torch.nn.utils.clip_grad_norm_(
             [p for p in model.parameters() if p.requires_grad], 1.0)
@@ -139,34 +139,89 @@ def finetune_fold(config, fold_idx, save_dir=None):
 
     if best_state: model.load_state_dict(best_state)
 
-    # ─── Test + agregación subject-level ─────────────────────────────
+        # ─── Recolectar predicciones en VAL (para umbral óptimo) ─────────
     model.eval()
+    val_labels, val_probs = [], []
+    with torch.no_grad():
+        for batch in val_loader:
+            ts = batch["timeseries"].to(device)
+            pcc = batch["pcc_vector"].to(device)
+            y = batch["label"].to(device)
+            site = batch["site_id"].to(device)
+            tag_logits, _, _ = task.execution_step(
+                model, ts, pcc, y,
+                domain_targets=site,
+                return_tag_logits=True,
+            )
+            probs = torch.softmax(tag_logits, dim=1)[:, 1]
+            val_probs.extend(probs.cpu().numpy())
+            val_labels.extend(y.cpu().numpy())
+
+    val_labels = np.array(val_labels)
+    val_probs = np.array(val_probs)
+
+    # Umbral óptimo por Youden's J sobre validación
+    from sklearn.metrics import roc_curve
+    if len(np.unique(val_labels)) > 1:
+        fpr, tpr, thr = roc_curve(val_labels, val_probs)
+        j = tpr - fpr
+        optimal_thr = float(thr[j.argmax()])
+    else:
+        optimal_thr = 0.5
+    print(f"  Umbral óptimo (val, Youden J): {optimal_thr:.4f}")
+
+    # ─── Evaluación test ─────────────────────────────────────────────
     preds, labels, probs = [], [], []
     with torch.no_grad():
         for batch in test_loader:
             ts = batch["timeseries"].to(device)
             pcc = batch["pcc_vector"].to(device)
             y = batch["label"].to(device)
-            tag_logits = model(ts, pcc, return_domain_logits=False)   # ← explícito
+            tag_logits = model(ts, pcc, return_domain_logits=False)
             probs.extend(torch.softmax(tag_logits, dim=1)[:, 1].cpu().numpy())
             preds.extend(torch.argmax(tag_logits, dim=1).cpu().numpy())
             labels.extend(y.cpu().numpy())
 
+    labels = np.array(labels)
+    probs = np.array(probs)
+    preds = np.array(preds)
+
+    # ─── Guardar predicciones crudas para análisis posterior ─────────
+    if save_dir is not None:
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            save_dir / f"preds_fold_{fold_idx}.npz",
+            labels=labels,              # window-level, enteros 0/1
+            probs=probs,                # window-level, P(ASD)
+            preds=preds,                # window-level, umbral 0.5
+            val_labels=val_labels,
+            val_probs=val_probs,
+            optimal_thr=np.array([optimal_thr]),
+            test_idx=split_info["test_idx"],
+            subject_indices=split_info["subject_indices"],
+        )
+
+    # ─── Agregación subject-level ────────────────────────────────────
     si = split_info["subject_indices"]; ti = split_info["test_idx"]
     n_subj = len(np.unique(si[ti]))
     if len(ti) > n_subj:
         yt, yp, ypr = aggregate_window_predictions_to_subject_level(
-            labels, preds, probs, ti, si, strategy=config.get("SUBJECT_AGG", "majority_vote"))
+            labels.tolist(), preds.tolist(), probs.tolist(),
+            ti, si, strategy=config.get("SUBJECT_AGG", "majority_vote"))
         print(f"\n  Fold {fold_idx}: subject-level ({len(ti)} → {n_subj} sujetos)")
     else:
-        yt, yp, ypr = np.array(labels), np.array(preds), np.array(probs)
+        yt, yp, ypr = labels, preds, probs
 
     m = compute_metrics(yt, yp, ypr)
-    print(f"  AUC={m['auc']:.4f}  ACC={m['accuracy']:.4f}  Sens={m['sensitivity']:.4f}  Spec={m['specificity']:.4f}  F1={m['f1']:.4f}")
+    print(f"  AUC={m['auc']:.4f}  ACC={m['accuracy']:.4f}  "
+          f"Sens={m['sensitivity']:.4f}  Spec={m['specificity']:.4f}  "
+          f"F1={m['f1']:.4f}")
 
     if save_dir is not None:
-        save_dir = Path(save_dir); save_dir.mkdir(parents=True, exist_ok=True)
-        torch.save({"model_state_dict": model.state_dict(), "metrics": m},
-                   save_dir / f"best_finetune_fold_{fold_idx}.pt")
+        torch.save(
+            {"model_state_dict": model.state_dict(), "metrics": m},
+            save_dir / f"best_finetune_fold_{fold_idx}.pt",
+        )
         print(f"  💾 best_finetune_fold_{fold_idx}.pt")
     return m
