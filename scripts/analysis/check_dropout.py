@@ -1,6 +1,12 @@
 """
 Verifica el dropout real aplicado en el modelo finetuneado.
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import glob
 from pathlib import Path
 

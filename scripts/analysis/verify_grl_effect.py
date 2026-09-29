@@ -2,6 +2,12 @@
 Verifica GRL: lambda=1 invierte, lambda=-1 no invierte (identidad).
 Reutiliza checkpoints guardados (no re-entrena).
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import glob
 from pathlib import Path
 

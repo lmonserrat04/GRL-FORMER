@@ -9,6 +9,12 @@ info de sitio "pura" (no explicable por label).
 Uso:
     python site_invariance_conditional.py <root1> [<root2> ...]
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import argparse
 import glob
 import json

@@ -9,6 +9,12 @@ Ejemplo:
         experiments_sweep_dropout_loso/loso_no_grl_dp0.3/checkpoints \
         experiments_sweep_minimal/loso_grl_g3_w1/checkpoints
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import argparse
 import sys
 from pathlib import Path

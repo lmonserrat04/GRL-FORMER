@@ -4,6 +4,12 @@ Analiza predicciones crudas guardadas por finetune_fold.
 Parámetro MIN_N: descarta folds con menos de MIN_N sujetos en test
 (solo afecta a los agregados; el per-fold siempre se imprime completo).
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import json
 import sys
 from pathlib import Path

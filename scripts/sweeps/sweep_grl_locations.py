@@ -9,6 +9,12 @@ Variantes:
   4. grl_fc_fused   → GRL en proj head TST2 + fused
 Referencia: single_C (GRL solo en fused) → 0.7234
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import copy
 import glob
 import json

@@ -2,6 +2,12 @@
 Corre config C (γ=1, w=0.1, warmup=10) en LOSO.
 Compara con los baselines.
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import copy
 import glob
 import json

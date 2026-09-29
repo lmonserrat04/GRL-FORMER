@@ -3,6 +3,12 @@ Sweep GRL tuning: 4 configs (γ × w × warmup).
 Reutiliza pretrain + contrastive. Solo re-corre finetune K-fold.
 Guarda preds para analyze_predictions.py.
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import copy
 import glob
 import json

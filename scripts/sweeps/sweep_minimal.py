@@ -3,6 +3,12 @@ Sweep mínimo: solo los 2 configs ganadores (GRL g3_w1) en kfold y loso.
 Guarda predicciones crudas para análisis posterior.
 Reutiliza pretrain + contrastive del último experimento.
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import copy
 import glob
 import json

@@ -2,6 +2,12 @@
 Sweep: dropout=0.3, K-fold vs LOSO, no_grl vs grl_g3_w1.0.
 Reutiliza pretrain + contrastive de un experimento previo.
 """
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import copy
 import glob
 import json

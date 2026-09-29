@@ -1,4 +1,10 @@
 """Re-corre LOSO sin GRL con guardado de predicciones."""
+# --- sys.path bootstrap (scripts movidos a subcarpetas) ---
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+# --- end bootstrap ---
+
 import copy, glob, json
 from pathlib import Path
 import numpy as np, torch, yaml
