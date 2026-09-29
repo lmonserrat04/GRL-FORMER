@@ -1,4 +1,4 @@
-RUN_NAME: transformer_baseline
+RUN_NAME: grl_interp
 RAW_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200
 INTERP_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp
 CONNECTIVITY_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_connectivity
@@ -18,7 +18,7 @@ FACTORS:
 MAX_SEQ_LEN: 116
 STRATIFY_BY_SITE: false
 USE_WEIGHTED_SAMPLER: false
-USE_INTERP: false
+USE_INTERP: true
 SEED: 42
 N_FOLDS: 5
 TST1:
@@ -96,17 +96,18 @@ FINETUNING:
   MIN_DELTA: 0.001
   GRL_LAMBDA: 1.0
   GRL_SCHEDULE: true
-  GRL_GAMMA: 10.0
-  DOMAIN_WEIGHT: 1.0
-  GRL_WARMUP: 0
+  GRL_GAMMA: 1.0
+  DOMAIN_WEIGHT: 0.1
+  GRL_WARMUP: 10
   GRL_MULTILAYER: false
   GRL_STREAM_HIDDEN_DIMS: null
   GRL_LOCATIONS:
-  - fused
+  - fc
 CHECKPOINTS:
   PT_TS: best_pt_ts_model
   PT_FC: best_pt_fc_model
   CONT: best_cont_model
   FINETUNE: best_finetuned_model
-EVAL_PROTOCOL: kfold
+EVAL_PROTOCOL: loso
 N_JOBS: 4
+PCC_KIND: tangent
