@@ -99,7 +99,7 @@ def compute_all(config: dict) -> dict:
     print(f"Calculando conectividad kind={kind} para {all_ts.shape[0]} sujetos...")
 
     if kind == "tangent":
-        vectors = compute_pcc_tangent_batch(all_ts)
+        vectors = compute_pcc_tangent_batch(all_ts, n_jobs=int(config.get('N_JOBS', 4)))
     elif kind == "pearson":
         vecs = [compute_pcc_vector(ts).numpy()
                 for ts in [np.asarray(x.T) for x in all_ts]]
