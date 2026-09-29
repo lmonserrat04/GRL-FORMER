@@ -11,3 +11,4 @@ smoke_grl.py
 test_pipeline.py
 .hypothesis/
 experiments_*/
+*.rar
