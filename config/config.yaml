@@ -100,6 +100,17 @@ FINETUNING:
   GRL_WARMUP: 0
   GRL_MULTILAYER: false
   GRL_STREAM_HIDDEN_DIMS: null
+  FINETUNING:
+  GRL_LOCATIONS: ["fused"]     # default = single-layer actual
+  # Variantes para probar:
+  # ["ts"]                     # variante 1
+  # ["fc"]                     # variante 2
+  # ["ts", "fc"]               # ya probado (multi-layer clásico)
+  # ["ts", "fused"]            # variante 4a
+  # ["fc", "fused"]            # variante 4b
+
+
+
 CHECKPOINTS:
   PT_TS: best_pt_ts_model
   PT_FC: best_pt_fc_model

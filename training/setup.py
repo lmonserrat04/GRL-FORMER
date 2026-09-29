@@ -151,9 +151,10 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
         print(f"  num_domains (sitios únicos): {num_domains}")
         grl_multilayer = bool(phase.get("GRL_MULTILAYER", False))
         grl_stream_hidden_dims = phase.get("GRL_STREAM_HIDDEN_DIMS", None)
+        grl_locations = phase.get("GRL_LOCATIONS", None)          # ← nuevo
         print(f"  GRL multilayer: {grl_multilayer}")
         print(f"  GRL stream hidden dims: {grl_stream_hidden_dims}")
-        
+        print(f"  GRL locations: {grl_locations}")                 # ← nuevo
         
         model = create_dual_stream_model(
             tst1_config=_tst1_cfg(config),
@@ -170,8 +171,8 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
             domain_weight=float(phase.get("DOMAIN_WEIGHT", 1.0)),
             multilayer=grl_multilayer,
             grl_stream_hidden_dims=grl_stream_hidden_dims,
+            grl_locations=grl_locations,                        # ← nuevo
         ).to(device)
-
 
         if config.get("CKPT_TST1"):
             model.load_pretrained_tst1(config["CKPT_TST1"], strict=False)

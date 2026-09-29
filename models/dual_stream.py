@@ -2,16 +2,20 @@
 Modelo Dual-Stream (Doble Flujo)
 Modelo completo que integra TST1, TST2 y el módulo de fusión.
 
-Soporta dos modos de domain adversarial training:
+Soporta GRL (Gradient Reversal Layer) en ubicaciones configurables:
 
-  - Modo single (multilayer=False):
-      domain_classifier(GRL(fused))
+  - "ts"     → GRL sobre la salida de proj_head_1 (embedding TST1)
+  - "fc"     → GRL sobre la salida de proj_head_2 (embedding TST2)
+  - "fused"  → GRL sobre la fusión (comportamiento single-layer clásico)
 
-  - Modo multi-layer (multilayer=True):
-      domain_classifier_ts(GRL(h_ts))
-      domain_classifier_fc(GRL(h_fc))
-      domain_classifier_fused(GRL(fused))
-      (tres GRLs independientes, tres domain classifiers)
+Configuración vía `grl_locations` (lista). Ejemplos:
+  - ["fused"]                → single-layer clásico
+  - ["ts"]                   → solo en projection head TST1
+  - ["fc"]                   → solo en projection head TST2
+  - ["ts", "fc"]             → multi-layer en ambos streams
+  - ["ts", "fc", "fused"]    → multi-layer completo
+  - ["ts", "fused"]          → TST1 + fusión
+  - ["fc", "fused"]          → TST2 + fusión
 """
 
 import torch
@@ -25,16 +29,19 @@ from .mlp_head import create_mlp_head
 from .grl import grad_reverse
 
 
+_VALID_GRL_LOCATIONS = {"ts", "fc", "fused"}
+
+
 class DualStreamModel(nn.Module):
     """
-    Modelo de pre-entrenamiento auto-supervisado de doble flujo
+    Modelo de doble flujo para clasificación de ASD con domain adaptation.
 
     Contiene:
     - TST1: Transformer temporal, procesa series temporales de fMRI
     - TST2: Transformer de conectividad, procesa vectores PCC
     - Módulo de fusión: Fusiona las características de ambos Transformers
-    - Cabezal de clasificación: Clasificador MLP
-    - Domain classifiers: 1 o 3 según modo
+    - Cabezal de clasificación: Clasificador MLP (tag_classifier)
+    - Domain classifiers: 1 o más según `grl_locations`
     """
 
     def __init__(
@@ -53,13 +60,18 @@ class DualStreamModel(nn.Module):
         domain_weight=1.0,
         multilayer=False,
         grl_stream_hidden_dims=None,
+        grl_locations=None,
     ):
         """
         Args:
             proj_head_1: Projection head entrenada en contrastive (TST1).
             proj_head_2: Idem para TST2.
-            multilayer: si True, usa 3 domain classifiers (ts, fc, fused) con GRL
-                        en cada stream. Si False, comportamiento original.
+            multilayer: legacy flag. Si `grl_locations` es None, se traduce a:
+                        True  → ["ts", "fc", "fused"]
+                        False → ["fused"]
+            grl_stream_hidden_dims: capas ocultas de D_ts y D_fc. None → mismas
+                                    que `hidden`. [] → sin capas ocultas.
+            grl_locations: lista de ubicaciones donde aplicar GRL.
         """
         super().__init__()
 
@@ -92,10 +104,27 @@ class DualStreamModel(nn.Module):
 
         self.grl_lambda: float = float(grl_lambda)
         self._domain_weight = float(domain_weight)
-        self.multilayer = bool(multilayer)
         self._grl_stream_hidden_dims = grl_stream_hidden_dims
 
-        # ─── Tag classifier ────────────────────────────────────────
+        # ─── Resolver grl_locations (con compat para flag multilayer) ────
+        if grl_locations is not None:
+            self.grl_locations = list(grl_locations)
+        else:
+            self.grl_locations = (
+                ["ts", "fc", "fused"] if multilayer else ["fused"]
+            )
+
+        invalid = set(self.grl_locations) - _VALID_GRL_LOCATIONS
+        if invalid:
+            raise ValueError(
+                f"GRL locations inválidas: {invalid}. "
+                f"Válidas: {_VALID_GRL_LOCATIONS}"
+            )
+
+        # Legacy: `multilayer=True` si hay más de una location
+        self.multilayer = len(self.grl_locations) > 1
+
+        # ─── Tag classifier ────────────────────────────────────────────
         mlp_dims = mlp_dims or [self.fusion_dim // 2, self.fusion_dim // 4, num_classes]
         hidden = list(mlp_dims)[:-1]
         self.tag_classifier = create_mlp_head(
@@ -104,30 +133,23 @@ class DualStreamModel(nn.Module):
             act_name="gelu",
         )
 
-        # ─── Domain classifiers ────────────────────────────────────
-        if self.multilayer:
-            # Capas ocultas para los domain classifiers de los streams.
-            # Si grl_stream_hidden_dims is None → usa hidden completo.
-            # Si es [] → sin capas ocultas.
-            # Si es [64] → una capa oculta de 64.
-            if grl_stream_hidden_dims is None:
-                stream_hidden = list(hidden)
-            else:
-                stream_hidden = list(grl_stream_hidden_dims)
+        # ─── Domain classifiers (solo para locations activas) ──────────
+        if grl_stream_hidden_dims is None:
+            stream_hidden = list(hidden)
+        else:
+            stream_hidden = list(grl_stream_hidden_dims)
 
+        if "ts" in self.grl_locations:
             self.domain_classifier_ts = create_mlp_head(
                 [dim_ts_fusion] + stream_hidden + [num_domains],
                 dropout, act_name="relu",
             )
+        if "fc" in self.grl_locations:
             self.domain_classifier_fc = create_mlp_head(
                 [dim_fc_fusion] + stream_hidden + [num_domains],
                 dropout, act_name="relu",
             )
-            self.domain_classifier = create_mlp_head(
-                [self.fusion_dim] + hidden + [num_domains],
-                dropout, act_name="relu",
-            )
-        else:
+        if "fused" in self.grl_locations:
             self.domain_classifier = create_mlp_head(
                 [self.fusion_dim] + hidden + [num_domains],
                 dropout, act_name="relu",
@@ -150,7 +172,7 @@ class DualStreamModel(nn.Module):
         if self.proj_head_2 is not None:
             h_fc = self.proj_head_2(h_fc)
 
-        # Fusión
+        # ─── Fusión ────────────────────────────────────────────────────
         if return_attention and hasattr(self.fusion, 'forward'):
             if 'return_attention' in self.fusion.forward.__code__.co_varnames:
                 fused, attention_weights = self.fusion(h_ts, h_fc, return_attention=True)
@@ -161,31 +183,32 @@ class DualStreamModel(nn.Module):
             fused = self.fusion(h_ts, h_fc)
             attention_weights = None
 
-        # Tag classifier (sin GRL)
+        # ─── Tag classifier (sin GRL) ──────────────────────────────────
         tag_logits = self.tag_classifier(fused)
 
-        # Domain classifiers (con GRL)
-        if self.multilayer:
-            dom_ts = self.domain_classifier_ts(
-                grad_reverse(h_ts, lambda_=self.grl_lambda)
+        # ─── Domain classifiers con GRL por location ───────────────────
+        domain_logits_list = []
+        if "ts" in self.grl_locations:
+            domain_logits_list.append(
+                self.domain_classifier_ts(
+                    grad_reverse(h_ts, lambda_=self.grl_lambda)
+                )
             )
-            dom_fc = self.domain_classifier_fc(
-                grad_reverse(h_fc, lambda_=self.grl_lambda)
+        if "fc" in self.grl_locations:
+            domain_logits_list.append(
+                self.domain_classifier_fc(
+                    grad_reverse(h_fc, lambda_=self.grl_lambda)
+                )
             )
-            dom_fused = self.domain_classifier(
-                grad_reverse(fused, lambda_=self.grl_lambda)
-            )
-        else:
-            dom_ts = None
-            dom_fc = None
-            dom_fused = self.domain_classifier(
-                grad_reverse(fused, lambda_=self.grl_lambda)
+        if "fused" in self.grl_locations:
+            domain_logits_list.append(
+                self.domain_classifier(
+                    grad_reverse(fused, lambda_=self.grl_lambda)
+                )
             )
 
         if return_domain_logits:
-            if self.multilayer:
-                return tag_logits, dom_ts, dom_fc, dom_fused
-            return tag_logits, dom_fused
+            return tuple([tag_logits] + domain_logits_list)
 
         return tag_logits
 
@@ -257,6 +280,7 @@ def create_dual_stream_model(
     domain_weight: float = 1.0,
     multilayer: bool = False,
     grl_stream_hidden_dims=None,
+    grl_locations=None,
 ):
     fusion_config = {}
     if fusion_type == "attention_pooling" and fusion_hidden_dim is not None:
@@ -277,4 +301,5 @@ def create_dual_stream_model(
         domain_weight=domain_weight,
         multilayer=multilayer,
         grl_stream_hidden_dims=grl_stream_hidden_dims,
+        grl_locations=grl_locations,
     )
