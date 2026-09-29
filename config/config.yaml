@@ -1,8 +1,11 @@
 RUN_NAME: transformer_baseline
 RAW_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200
 INTERP_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp
+CONNECTIVITY_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_connectivity
 CSV_PATH: ./data/csv/data_train.csv
 LOGS_PATH: ./logs/
+
+
 ATLAS: cc200
 N_ROIS: 200
 TR: 2.0
@@ -100,7 +103,6 @@ FINETUNING:
   GRL_WARMUP: 0
   GRL_MULTILAYER: false
   GRL_STREAM_HIDDEN_DIMS: null
-  FINETUNING:
   GRL_LOCATIONS: ["fused"]     # default = single-layer actual
   # Variantes para probar:
   # ["ts"]                     # variante 1
