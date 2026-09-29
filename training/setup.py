@@ -149,6 +149,10 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
         data = load_raw_data(config)
         num_domains = len(data["site_to_idx"])
         print(f"  num_domains (sitios únicos): {num_domains}")
+        grl_multilayer = bool(phase.get("GRL_MULTILAYER", False))
+        grl_stream_hidden_dims = phase.get("GRL_STREAM_HIDDEN_DIMS", None)
+        print(f"  GRL multilayer: {grl_multilayer}")
+        print(f"  GRL stream hidden dims: {grl_stream_hidden_dims}")
         
         
         model = create_dual_stream_model(
@@ -163,7 +167,9 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
             proj_head_1=p1,
             proj_head_2=p2,
             grl_lambda=float(phase.get("GRL_LAMBDA", 1.0)),
-            domain_weight=float(phase.get("DOMAIN_WEIGHT", 1.0)),   # ← nuevo
+            domain_weight=float(phase.get("DOMAIN_WEIGHT", 1.0)),
+            multilayer=grl_multilayer,
+            grl_stream_hidden_dims=grl_stream_hidden_dims,
         ).to(device)
 
 

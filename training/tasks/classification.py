@@ -1,10 +1,16 @@
 """
 Classification task — usada en finetune.
 
-Firma que espera el trainer:
-    loss = task.execution_step(model, ts_batch, pcc_batch, targets)
+Soporta dos modos de domain adversarial training, según model.multilayer:
 
-El modelo es DualStreamModel y su forward devuelve logits (B, num_classes).
+  - single (multilayer=False):
+      model devuelve (tag_logits, domain_logits)
+      1 domain loss.
+
+  - multi (multilayer=True):
+      model devuelve (tag_logits, dom_ts, dom_fc, dom_fused)
+      3 domain losses, se combinan como (ts + fc + fused) / 3.
+
 Criterio: CrossEntropyLoss (Ec. 16 del paper).
 """
 
@@ -21,7 +27,6 @@ class ClassificationTask:
         self.device = device
         self.criterion = nn.CrossEntropyLoss()
 
-
     def execution_step(
         self,
         model: DualStreamModel,
@@ -31,50 +36,33 @@ class ClassificationTask:
         domain_targets: torch.Tensor | None = None,
         return_tag_logits: bool = False,
         return_domain_logits: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, ...]:
+    ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         """
-        Ejecuta un paso de forward + cálculo de pérdidas para DualStreamModel.
-
-        Args:
-            model:
-                Modelo DualStreamModel.
-            ts_batch:
-                Tensor (B, T, R) con series temporales.
-            pcc_batch:
-                Tensor (B, D) con vectores PCC.
-            tag_targets:
-                Tensor (B,2) con etiquetas enteras para clasificación de tag/diagnóstico.
-            domain_targets:
-                Tensor (B,N_SITES) con etiquetas enteras para clasificación de dominio/sitio.
-                Si es None, no se calcula pérdida de dominio.
-            return_tag_logits:
-                Si es True, incluye los logits de tag en la salida.
-            return_domain_logits:
-                Si es True, incluye los logits de dominio en la salida.
-                Requiere que domain_targets no sea None; en caso contrario
-                se lanza ValueError.
+        Forward + cálculo de pérdidas.
 
         Returns:
-            Dependiendo de los flags y de si hay domain_targets, retorna:
-            - tag_loss (Tensor escalar) si no se pide nada más.
-            - (tag_logits, tag_loss) si return_tag_logits=True y no hay domain_targets.
-            - (tag_loss, domain_loss) si hay domain_targets y no se piden logits.
-            - (tag_logits, tag_loss, domain_loss) si return_tag_logits=True y hay domain_targets.
-            - (tag_loss, domain_loss, domain_logits) si return_domain_logits=True.
-            - (tag_logits, tag_loss, domain_loss, domain_logits) si ambos flags son True.
+            Dependiendo de los flags y del modo (single/multi), retorna:
+              Sin domain_targets:
+                - tag_loss                                        (flags off)
+                - (tag_logits, tag_loss)                          (return_tag_logits)
+              Single-layer con domain_targets:
+                - (tag_loss, domain_loss)
+                - (tag_logits, tag_loss, domain_loss)             (return_tag_logits)
+                - (tag_loss, domain_loss, domain_logits)          (return_domain_logits)
+                - (tag_logits, tag_loss, domain_loss, domain_logits)
+              Multi-layer con domain_targets:
+                - (tag_loss, domain_loss)
+                - (tag_logits, tag_loss, domain_loss)             (return_tag_logits)
+                - (tag_loss, domain_loss, dom_ts, dom_fc, dom_fused)              (return_domain_logits)
+                - (tag_logits, tag_loss, domain_loss, dom_ts, dom_fc, dom_fused)
 
-            Orden de la tupla:
-                (tag_logits?, tag_loss, domain_loss?, domain_logits?)
-            donde '?' indica que el elemento solo aparece si se solicita.
-
-        Raises:
-            ValueError:
-                Si return_domain_logits=True y domain_targets es None.
+            Donde domain_loss es la media de las losses disponibles
+            (1 en single, 3 en multi).
         """
         if return_domain_logits and domain_targets is None:
             raise ValueError(
                 "return_domain_logits=True requiere domain_targets; "
-                "no tiene sentido devolver logits de dominio sin etiquetas de dominio."
+                "no tiene sentido devolver logits de dominio sin etiquetas."
             )
 
         ts_batch = ts_batch.to(self.device)
@@ -84,24 +72,43 @@ class ClassificationTask:
         if domain_targets is not None:
             domain_targets = domain_targets.to(self.device)
 
-        need_domain_logits = domain_targets is not None
+        need_domain = domain_targets is not None
+        is_multilayer = getattr(model, "multilayer", False)
 
-        if need_domain_logits:
-            tag_logits, domain_logits = model(
-                ts_batch,
-                pcc_batch,
-                return_domain_logits=True,
-            )
+        # ─── Forward ─────────────────────────────────────────────────
+        if need_domain:
+            if is_multilayer:
+                tag_logits, dom_ts, dom_fc, dom_fused = model(
+                    ts_batch, pcc_batch, return_domain_logits=True,
+                )
+            else:
+                tag_logits, dom_fused = model(
+                    ts_batch, pcc_batch, return_domain_logits=True,
+                )
+                dom_ts, dom_fc = None, None
         else:
             tag_logits = model(
-                ts_batch,
-                pcc_batch,
-                return_domain_logits=False,
+                ts_batch, pcc_batch, return_domain_logits=False,
             )
-            domain_logits = None
+            dom_ts, dom_fc, dom_fused = None, None, None
 
+        # ─── Tag loss ────────────────────────────────────────────────
         tag_loss = self.criterion(tag_logits, tag_targets)
 
+        # ─── Domain loss(es) ─────────────────────────────────────────
+        if need_domain:
+            if is_multilayer:
+                dom_loss = (
+                    self.criterion(dom_ts, domain_targets)
+                    + self.criterion(dom_fc, domain_targets)
+                    + self.criterion(dom_fused, domain_targets)
+                ) / 3.0
+            else:
+                dom_loss = self.criterion(dom_fused, domain_targets)
+        else:
+            dom_loss = None
+
+        # ─── Construcción de la tupla de retorno ─────────────────────
         outputs: list[torch.Tensor] = []
 
         if return_tag_logits:
@@ -109,115 +116,13 @@ class ClassificationTask:
 
         outputs.append(tag_loss)
 
-        if domain_targets is not None:
-            domain_loss = self.criterion(domain_logits, domain_targets)
-            outputs.append(domain_loss)
+        if dom_loss is not None:
+            outputs.append(dom_loss)
 
         if return_domain_logits:
-            outputs.append(domain_logits)
+            if is_multilayer:
+                outputs.extend([dom_ts, dom_fc, dom_fused])
+            else:
+                outputs.append(dom_fused)
 
         return outputs[0] if len(outputs) == 1 else tuple(outputs)
-
-
-            
-            
-
-
-        
-   
-
-# ──────────────────────────────────────────────────────────────────────
-# Tests
-# ──────────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    torch.manual_seed(0)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # ─── Modelo dummy: logits deterministas ───────────────────────────
-    class DummyDualStream(nn.Module):
-        def __init__(self, num_classes=2):
-            super().__init__()
-            self.num_classes = num_classes
-
-        def forward(self, ts, pcc):
-            # logits derivados del input (para que el gradiente fluya)
-            s = ts.mean(dim=(1, 2)) + pcc.mean(dim=1)
-            return torch.stack([s, -s], dim=1)[:, : self.num_classes]
-
-    task = ClassificationTask(device)
-    B, T, R, D = 8, 100, 200, 19900
-
-    # ─── TEST 1: loss escalar y positiva ──────────────────────────────
-    print("── TEST 1: loss escalar y positiva ─────────────────────────")
-    ts = torch.randn(B, T, R)
-    pcc = torch.randn(B, D)
-    y = torch.randint(0, 2, (B,))
-    loss = task.domain_execution_step(DummyDualStream(), ts, pcc, y)
-    assert loss.dim() == 0
-    assert loss.item() > 0
-    print(f"  ✓ loss={loss.item():.4f}\n")
-
-    # ─── TEST 2: predicciones perfectas → loss baja ───────────────────
-    print("── TEST 2: predicciones perfectas vs aleatorias ────────────")
-
-    class FixedLogits(nn.Module):
-        def __init__(self, logits):
-            super().__init__()
-            self.logits = logits
-
-        def forward(self, ts, pcc):
-            return self.logits
-
-    # Logits muy confiados y correctos
-    y = torch.tensor([0, 1, 0, 1, 0, 1, 0, 1])
-    logits_perfect = torch.tensor([[10.0, -10.0], [-10.0, 10.0]] * 4)
-    loss_perfect = task.domain_execution_step(
-        FixedLogits(logits_perfect), ts[:len(y)], pcc[:len(y)], y
-    )
-
-    # Logits al azar
-    logits_random = torch.randn(len(y), 2)
-    loss_random = task.domain_execution_step(
-        FixedLogits(logits_random), ts[:len(y)], pcc[:len(y)], y
-    )
-    assert loss_perfect.item() < loss_random.item()
-    print(f"  ✓ loss perfecta={loss_perfect.item():.4f}  <  "
-          f"aleatoria={loss_random.item():.4f}\n")
-
-    # ─── TEST 3: gradient flow ────────────────────────────────────────
-    print("── TEST 3: gradient flow ────────────────────────────────────")
-
-    class LearnableModel(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.scale = nn.Parameter(torch.tensor(1.0))
-
-        def forward(self, ts, pcc):
-            s = (ts.mean(dim=(1, 2)) + pcc.mean(dim=1)) * self.scale
-            return torch.stack([s, -s], dim=1)
-
-    m = LearnableModel()
-    loss = task.domain_execution_step(m, ts, pcc, y)
-    loss.backward()
-    assert m.scale.grad is not None and m.scale.grad.abs().item() > 0
-    print(f"  ✓ gradiente fluye, grad={m.scale.grad.item():.4f}\n")
-
-    # ─── TEST 4: entrena y baja la loss ───────────────────────────────
-    print("── TEST 4: entrena y baja la loss en 20 pasos ───────────────")
-    m = LearnableModel()
-    optimizer = torch.optim.Adam(m.parameters(), lr=0.1)
-
-    # Objetivo trivial: que la loss media baje
-    losses = []
-    for _ in range(20):
-        optimizer.zero_grad()
-        loss = task.domain_execution_step(m, ts, pcc, y)
-        loss.backward()
-        optimizer.step()
-        losses.append(loss.item())
-
-    assert losses[-1] < losses[0], f"{losses[0]:.4f} → {losses[-1]:.4f}"
-    print(f"  ✓ loss {losses[0]:.4f} → {losses[-1]:.4f}\n")
-
-    print("✅ Todos los tests de classification.py pasaron.")

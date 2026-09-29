@@ -1,9 +1,19 @@
 """
 Modelo Dual-Stream (Doble Flujo)
-Modelo completo que integra TST1, TST2 y el módulo de fusión
+Modelo completo que integra TST1, TST2 y el módulo de fusión.
+
+Soporta dos modos de domain adversarial training:
+
+  - Modo single (multilayer=False):
+      domain_classifier(GRL(fused))
+
+  - Modo multi-layer (multilayer=True):
+      domain_classifier_ts(GRL(h_ts))
+      domain_classifier_fc(GRL(h_fc))
+      domain_classifier_fused(GRL(fused))
+      (tres GRLs independientes, tres domain classifiers)
 """
 
-import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,7 +25,6 @@ from .mlp_head import create_mlp_head
 from .grl import grad_reverse
 
 
-
 class DualStreamModel(nn.Module):
     """
     Modelo de pre-entrenamiento auto-supervisado de doble flujo
@@ -25,6 +34,7 @@ class DualStreamModel(nn.Module):
     - TST2: Transformer de conectividad, procesa vectores PCC
     - Módulo de fusión: Fusiona las características de ambos Transformers
     - Cabezal de clasificación: Clasificador MLP
+    - Domain classifiers: 1 o 3 según modo
     """
 
     def __init__(
@@ -40,30 +50,31 @@ class DualStreamModel(nn.Module):
         proj_head_1=None,
         proj_head_2=None,
         grl_lambda=1.0,
-        domain_weight=1.0,        # ← nuevo
+        domain_weight=1.0,
+        multilayer=False,
+        grl_stream_hidden_dims=None,
     ):
         """
         Args:
             proj_head_1: Projection head entrenada en contrastive (TST1).
-                         Si se pasa, la fusión opera sobre z (128), no sobre h_ts.
             proj_head_2: Idem para TST2.
+            multilayer: si True, usa 3 domain classifiers (ts, fc, fused) con GRL
+                        en cada stream. Si False, comportamiento original.
         """
         super().__init__()
 
         self.transformer_ts = create_transformer_ts(tst1_config)
         self.transformer_fc = create_transformer_fc(tst2_config)
 
-        self.dim_ts = self.transformer_ts.emb_dim   # 512
-        self.dim_fc = self.transformer_fc.d_model   # 256
+        self.dim_ts = self.transformer_ts.emb_dim
+        self.dim_fc = self.transformer_fc.d_model
 
-        # Projection heads opcionales
         self.proj_head_1 = proj_head_1
         self.proj_head_2 = proj_head_2
 
-        # La fusión opera sobre z si hay projections
         if proj_head_1 is not None and proj_head_2 is not None:
-            dim_ts_fusion = proj_head_1.net[-1].out_features   # 128
-            dim_fc_fusion = proj_head_2.net[-1].out_features   # 128
+            dim_ts_fusion = proj_head_1.net[-1].out_features
+            dim_fc_fusion = proj_head_2.net[-1].out_features
         else:
             dim_ts_fusion = self.dim_ts
             dim_fc_fusion = self.dim_fc
@@ -75,30 +86,65 @@ class DualStreamModel(nn.Module):
         self.fusion_type = fusion_type
         self.num_classes = num_classes
 
-        fusion_dim = self.fusion.output_dim
-        self.grl_lambda : float = float(grl_lambda)
+        self.fusion_dim = self.fusion.output_dim
+        self.dim_ts_fusion = dim_ts_fusion
+        self.dim_fc_fusion = dim_fc_fusion
+
+        self.grl_lambda: float = float(grl_lambda)
         self._domain_weight = float(domain_weight)
+        self.multilayer = bool(multilayer)
+        self._grl_stream_hidden_dims = grl_stream_hidden_dims
 
-        
-        # Capas ocultas compartidas; solo cambia la última capa (salida)
-        hidden = list(mlp_dims)[:-1]              # [256, 64]
-
+        # ─── Tag classifier ────────────────────────────────────────
+        mlp_dims = mlp_dims or [self.fusion_dim // 2, self.fusion_dim // 4, num_classes]
+        hidden = list(mlp_dims)[:-1]
         self.tag_classifier = create_mlp_head(
-            [fusion_dim] + hidden + [num_classes],
+            [self.fusion_dim] + hidden + [num_classes],
             dropout,
             act_name="gelu",
         )
-        self.domain_classifier = create_mlp_head(
-            [fusion_dim] + hidden + [num_domains],
-            dropout,
-            act_name="relu",
-        )
 
-    def forward(self, timeseries, pcc_vector,*, return_domain_logits: bool = False, return_features=False, return_attention=False):
+        # ─── Domain classifiers ────────────────────────────────────
+        if self.multilayer:
+            # Capas ocultas para los domain classifiers de los streams.
+            # Si grl_stream_hidden_dims is None → usa hidden completo.
+            # Si es [] → sin capas ocultas.
+            # Si es [64] → una capa oculta de 64.
+            if grl_stream_hidden_dims is None:
+                stream_hidden = list(hidden)
+            else:
+                stream_hidden = list(grl_stream_hidden_dims)
+
+            self.domain_classifier_ts = create_mlp_head(
+                [dim_ts_fusion] + stream_hidden + [num_domains],
+                dropout, act_name="relu",
+            )
+            self.domain_classifier_fc = create_mlp_head(
+                [dim_fc_fusion] + stream_hidden + [num_domains],
+                dropout, act_name="relu",
+            )
+            self.domain_classifier = create_mlp_head(
+                [self.fusion_dim] + hidden + [num_domains],
+                dropout, act_name="relu",
+            )
+        else:
+            self.domain_classifier = create_mlp_head(
+                [self.fusion_dim] + hidden + [num_domains],
+                dropout, act_name="relu",
+            )
+
+    def forward(
+        self,
+        timeseries,
+        pcc_vector,
+        *,
+        return_domain_logits: bool = False,
+        return_features=False,
+        return_attention=False,
+    ):
         h_ts = self.transformer_ts(timeseries, mode='finetune')
         h_fc = self.transformer_fc(pcc_vector, mode='finetune')
 
-        # Aplicar projections si están presentes (fine-tuning con projections del paper)
         if self.proj_head_1 is not None:
             h_ts = self.proj_head_1(h_ts)
         if self.proj_head_2 is not None:
@@ -115,56 +161,52 @@ class DualStreamModel(nn.Module):
             fused = self.fusion(h_ts, h_fc)
             attention_weights = None
 
-        # tag_classifier: sin GRL (queremos que fused sea discriminativo para tag)
+        # Tag classifier (sin GRL)
         tag_logits = self.tag_classifier(fused)
 
-        # domain_classifier: CON GRL (queremos que fused sea invariante al dominio)
-        domain_logits = self.domain_classifier(grad_reverse(fused, lambda_=self.grl_lambda))
-
-        # if return_features:
-        #     result.extend([fused, h_ts, h_fc])
-        # if return_attention and attention_weights is not None:
-        #     result.append(attention_weights)
+        # Domain classifiers (con GRL)
+        if self.multilayer:
+            dom_ts = self.domain_classifier_ts(
+                grad_reverse(h_ts, lambda_=self.grl_lambda)
+            )
+            dom_fc = self.domain_classifier_fc(
+                grad_reverse(h_fc, lambda_=self.grl_lambda)
+            )
+            dom_fused = self.domain_classifier(
+                grad_reverse(fused, lambda_=self.grl_lambda)
+            )
+        else:
+            dom_ts = None
+            dom_fc = None
+            dom_fused = self.domain_classifier(
+                grad_reverse(fused, lambda_=self.grl_lambda)
+            )
 
         if return_domain_logits:
-            return tag_logits, domain_logits
-        else:
-            return tag_logits
+            if self.multilayer:
+                return tag_logits, dom_ts, dom_fc, dom_fused
+            return tag_logits, dom_fused
 
+        return tag_logits
 
     def get_features(self, timeseries, pcc_vector):
-        """
-        Obtener características de ambos Transformers (para aprendizaje contrastivo)
-
-        Args:
-            timeseries: Serie temporal (batch, T, n_rois)
-            pcc_vector: Vector PCC (batch, pcc_dim)
-
-        Returns:
-            h_ts: Características de TST1 (batch, dim_ts)
-            h_fc: Características de TST2 (batch, dim_fc)
-        """
         h_ts = self.transformer_ts(timeseries, mode='finetune')
         h_fc = self.transformer_fc(pcc_vector, mode='finetune')
         return h_ts, h_fc
 
     def load_pretrained_tst1(self, checkpoint_path, strict=False):
-        """Cargar pesos pre-entrenados de TST1"""
         self.transformer_ts.load_pretrained(checkpoint_path, strict=strict)
 
     def load_pretrained_tst2(self, checkpoint_path, strict=False):
-        """Cargar pesos pre-entrenados de TST2"""
         self.transformer_fc.load_pretrained(checkpoint_path, strict=strict)
 
     def freeze_encoders(self):
-        """Congelar ambos codificadores Transformer"""
         for param in self.transformer_ts.parameters():
             param.requires_grad = False
         for param in self.transformer_fc.parameters():
             param.requires_grad = False
 
     def unfreeze_encoders(self):
-        """Descongelar ambos codificadores Transformer"""
         for param in self.transformer_ts.parameters():
             param.requires_grad = True
         for param in self.transformer_fc.parameters():
@@ -172,27 +214,10 @@ class DualStreamModel(nn.Module):
 
 
 class DualStreamModelSingleBranch(nn.Module):
-    """
-    Modelo de rama única (utilizado para experimentos de ablación)
-    Solo utiliza TST1 o TST2
-    """
+    """Modelo de rama única (ablación)."""
 
-    def __init__(
-        self,
-        branch='ts',
-        tst_config=None,
-        num_classes=2,
-        dropout=0.1
-    ):
-        """
-        Args:
-            branch: Qué rama utilizar ('ts' o 'fc')
-            tst_config: Configuración del Transformer
-            num_classes: Número de clases para clasificación
-            dropout: Ratio de Dropout
-        """
+    def __init__(self, branch='ts', tst_config=None, num_classes=2, dropout=0.1):
         super().__init__()
-
         self.branch = branch
 
         if branch == 'ts':
@@ -204,29 +229,17 @@ class DualStreamModelSingleBranch(nn.Module):
         else:
             raise ValueError(f"Unknown branch: {branch}")
 
-        # Cabezal de clasificación
         self.classifier = nn.Sequential(
             nn.Linear(feature_dim, feature_dim // 2),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(feature_dim // 2, num_classes)
+            nn.Linear(feature_dim // 2, num_classes),
         )
-
         self.num_classes = num_classes
 
     def forward(self, x):
-        """
-        Args:
-            x: Datos de entrada
-               - rama ts: (batch, T, n_rois)
-               - rama fc: (batch, pcc_dim)
-
-        Returns:
-            logits: Logits de clasificación (batch, num_classes)
-        """
         features = self.transformer(x, mode='finetune')
-        logits = self.classifier(features)
-        return logits
+        return self.classifier(features)
 
 
 def create_dual_stream_model(
@@ -241,9 +254,10 @@ def create_dual_stream_model(
     proj_head_1=None,
     proj_head_2=None,
     grl_lambda: float = 1.0,
-    domain_weight: float = 1.0,      # ← nuevo
+    domain_weight: float = 1.0,
+    multilayer: bool = False,
+    grl_stream_hidden_dims=None,
 ):
-    
     fusion_config = {}
     if fusion_type == "attention_pooling" and fusion_hidden_dim is not None:
         fusion_config["hidden_dim"] = fusion_hidden_dim
@@ -260,5 +274,7 @@ def create_dual_stream_model(
         proj_head_1=proj_head_1,
         proj_head_2=proj_head_2,
         grl_lambda=grl_lambda,
-        domain_weight=domain_weight,     # ← nuevo
+        domain_weight=domain_weight,
+        multilayer=multilayer,
+        grl_stream_hidden_dims=grl_stream_hidden_dims,
     )

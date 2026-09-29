@@ -98,6 +98,8 @@ FINETUNING:
   GRL_GAMMA: 10.0
   DOMAIN_WEIGHT: 1.0
   GRL_WARMUP: 0
+  GRL_MULTILAYER: false
+  GRL_STREAM_HIDDEN_DIMS: null
 CHECKPOINTS:
   PT_TS: best_pt_ts_model
   PT_FC: best_pt_fc_model
