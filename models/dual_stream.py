@@ -62,6 +62,8 @@ class DualStreamModel(nn.Module):
         grl_stream_hidden_dims=None,
         grl_locations=None,
         domain_classifier_type='dann',
+        cdan_entropy_weight=False,
+        cdan_linear_reduce=False,
     ):
         """
         Args:
@@ -147,8 +149,11 @@ class DualStreamModel(nn.Module):
         if dtype == "cdan" and set(self.grl_locations) != {"fused"}:
             raise ValueError(
                 f"CDAN solo soporta GRL_LOCATIONS=['fused'], "
-                f"recibido: {{self.grl_locations}}"
+                f"recibido: {self.grl_locations}"
             )
+
+        self.cdan_entropy_weight = bool(cdan_entropy_weight)
+        self.cdan_linear_reduce = bool(cdan_linear_reduce)
 
         # ─── Domain classifiers (solo para locations activas) ──────────
         if grl_stream_hidden_dims is None:
@@ -174,8 +179,20 @@ class DualStreamModel(nn.Module):
             else:
                 fused_in = self.fusion_dim
 
+            # CDAN_linear_reduce: proyección lineal d*C -> d antes del MLP
+            # (Long et al. 2018, Sec. 3.2)
+            if self.domain_classifier_type == "cdan" and self.cdan_linear_reduce:
+                self.domain_pre_project = nn.Sequential(
+                    nn.Linear(fused_in, self.fusion_dim),
+                    nn.ReLU(inplace=True),
+                )
+                fused_in_mlp = self.fusion_dim
+            else:
+                self.domain_pre_project = None
+                fused_in_mlp = fused_in
+
             self.domain_classifier = create_mlp_head(
-                [fused_in] + hidden + [num_domains],
+                [fused_in_mlp] + hidden + [num_domains],
                 dropout, act_name="relu",
             )
 
@@ -231,9 +248,24 @@ class DualStreamModel(nn.Module):
                 fused_rev = grad_reverse(fused, lambda_=self.grl_lambda)
                 outer = torch.einsum("bd,bc->bdc", fused_rev, tag_probs)
                 cdan_input = outer.reshape(fused_rev.size(0), -1)
+
+                if self.domain_pre_project is not None:
+                    cdan_input = self.domain_pre_project(cdan_input)
+
                 domain_logits_list.append(
                     self.domain_classifier(cdan_input)
                 )
+
+                # Entropy weighting (Eq. 6, Long et al. 2018):
+                # w(H(g)) = 1 + exp(-H(g)). Se expone el peso como atributo
+                # para que la loss lo consuma en ClassificationTask.
+                if self.cdan_entropy_weight:
+                    # entropía de tag_probs: H(g) = -sum_c g_c · log(g_c)
+                    log_probs = torch.log(tag_probs + 1e-8)
+                    H = -(tag_probs * log_probs).sum(dim=-1)          # (B,)
+                    self._last_entropy_weight = 1.0 + torch.exp(-H)   # (B,)
+                else:
+                    self._last_entropy_weight = None
             else:
                 domain_logits_list.append(
                     self.domain_classifier(
@@ -316,6 +348,8 @@ def create_dual_stream_model(
     grl_stream_hidden_dims=None,
     grl_locations=None,
     domain_classifier_type: str = "dann",
+    cdan_entropy_weight: bool = False,
+    cdan_linear_reduce: bool = False,
 ):
     fusion_config = {}
     if fusion_type == "attention_pooling" and fusion_hidden_dim is not None:
@@ -338,4 +372,6 @@ def create_dual_stream_model(
         grl_stream_hidden_dims=grl_stream_hidden_dims,
         grl_locations=grl_locations,
         domain_classifier_type=domain_classifier_type,
+        cdan_entropy_weight=cdan_entropy_weight,
+        cdan_linear_reduce=cdan_linear_reduce,
     )
