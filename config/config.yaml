@@ -1,4 +1,4 @@
-RUN_NAME: transformer_baseline
+RUN_NAME: grl_fc_weighted
 RAW_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200
 INTERP_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp
 CSV_PATH: ./data/csv/data_train.csv
@@ -95,25 +95,21 @@ FINETUNING:
   MIN_DELTA: 0.001
   GRL_LAMBDA: 1.0
   GRL_SCHEDULE: true
-  GRL_GAMMA: 10.0
-  DOMAIN_WEIGHT: 1.0
-  GRL_WARMUP: 0
+  GRL_GAMMA: 1.0
+  DOMAIN_WEIGHT: 0.1
+  GRL_WARMUP: 10
   GRL_MULTILAYER: false
   GRL_STREAM_HIDDEN_DIMS: null
-  FINETUNING:
-  GRL_LOCATIONS: ["fused"]     # default = single-layer actual
-  # Variantes para probar:
-  # ["ts"]                     # variante 1
-  # ["fc"]                     # variante 2
-  # ["ts", "fc"]               # ya probado (multi-layer clásico)
-  # ["ts", "fused"]            # variante 4a
-  # ["fc", "fused"]            # variante 4b
-
-
-
+  FINETUNING: null
+  GRL_LOCATIONS:
+  - fc
+  USE_SITE_CLASS_WEIGHTS: true
+  SITE_CLASS_WEIGHT_POWER: 1.0
+  SITE_CLASS_WEIGHT_NORMALIZE: site
 CHECKPOINTS:
   PT_TS: best_pt_ts_model
   PT_FC: best_pt_fc_model
   CONT: best_cont_model
   FINETUNE: best_finetuned_model
-EVAL_PROTOCOL: kfold
+EVAL_PROTOCOL: loso
+PCC_KIND: pearson

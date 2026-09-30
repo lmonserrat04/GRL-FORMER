@@ -16,6 +16,7 @@ Criterio: CrossEntropyLoss (Ec. 16 del paper).
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from models.dual_stream import DualStreamModel
 
@@ -34,6 +35,7 @@ class ClassificationTask:
         pcc_batch: torch.Tensor,
         tag_targets: torch.Tensor,
         domain_targets: torch.Tensor | None = None,
+        sample_weights: torch.Tensor | None = None,
         return_tag_logits: bool = False,
         return_domain_logits: bool = False,
     ):
@@ -59,8 +61,14 @@ class ClassificationTask:
             tag_logits = model(ts_batch, pcc_batch, return_domain_logits=False)
             domain_logits_list = []
 
-        # ─── Tag loss ────────────────────────────────────────────────
-        tag_loss = self.criterion(tag_logits, tag_targets)
+        # ─── Tag loss (opcionalmente ponderada por muestra) ────────
+        if sample_weights is not None:
+            per_sample = F.cross_entropy(
+                tag_logits, tag_targets, reduction="none"
+            )
+            tag_loss = (per_sample * sample_weights).mean()
+        else:
+            tag_loss = self.criterion(tag_logits, tag_targets)
 
         # ─── Domain loss (media sobre las locations activas) ────────
         if need_domain and domain_logits_list:

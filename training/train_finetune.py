@@ -15,7 +15,7 @@ from utils.metrics import compute_metrics, aggregate_window_predictions_to_subje
 from models.grl import ganin_lambda
 
 
-def train_epoch(model, loader, optimizer, task, device):
+def train_epoch(model, loader, optimizer, task, device, site_class_weights=None):
     model.train()
     total = 0.0
     for batch in loader:
@@ -24,9 +24,14 @@ def train_epoch(model, loader, optimizer, task, device):
         y = batch["label"].to(device)
         site = batch["site_id"].to(device)
 
+        sample_weights = None
+        if site_class_weights is not None:
+            sample_weights = site_class_weights[site, y]
+
         optimizer.zero_grad()
         tag_loss, domain_loss = task.execution_step(
             model, ts, pcc, y, domain_targets=site,
+            sample_weights=sample_weights,
         )
         w = model._domain_weight if hasattr(model, "_domain_weight") else 1.0
         loss = tag_loss + w * domain_loss
@@ -86,6 +91,34 @@ def finetune_fold(config, fold_idx, save_dir=None):
     if config.get("CKPT_CONTRASTIVE"):
         print(f"  ✓ Projections ← {config['CKPT_CONTRASTIVE']}")
 
+    # ─── Site-class weights (opcional) ───────────────────────────────
+    site_class_weights = None
+    if config.get("FINETUNING", {}).get("USE_SITE_CLASS_WEIGHTS", False):
+        from training.site_class_weights import (
+            compute_site_class_weight_matrix,
+            summarize_weight_matrix,
+        )
+
+        train_ds = train_loader.dataset
+        val_ds = val_loader.dataset
+
+        all_sites = np.concatenate([train_ds.site_ids, val_ds.site_ids])
+        num_sites = int(all_sites.max()) + 1
+        num_classes = config["DUAL_STREAM"]["NUM_CLASSES"]
+
+        W = compute_site_class_weight_matrix(
+            labels=train_ds.labels,
+            site_ids=train_ds.site_ids,
+            num_sites=num_sites,
+            num_classes=num_classes,
+            power=float(config["FINETUNING"].get("SITE_CLASS_WEIGHT_POWER", 1.0)),
+            normalize=config["FINETUNING"].get("SITE_CLASS_WEIGHT_NORMALIZE", "site"),
+        )
+        site_class_weights = torch.from_numpy(W).float().to(device)
+        print(f"  Site-class weights computed (num_sites={num_sites}, "
+              f"num_classes={num_classes})")
+        print(summarize_weight_matrix(W))
+
     trainable = [p for p in model.parameters() if p.requires_grad]
     total_p = sum(p.numel() for p in model.parameters())
     print(f"\n── Finetune fold {fold_idx} ──")
@@ -122,7 +155,7 @@ def finetune_fold(config, fold_idx, save_dir=None):
                     progress = (epoch - warmup - 1) / max(total_epochs - warmup - 1, 1)
                     model.grl_lambda = ganin_lambda(progress, gamma=gamma)
 
-            tl = train_epoch(model, train_loader, optimizer, task, device)
+            tl = train_epoch(model, train_loader, optimizer, task, device, site_class_weights=site_class_weights)
             vl, vm = validate(model, val_loader, task, device)
             scheduler.step()
             auc = vm["auc"]
