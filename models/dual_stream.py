@@ -61,6 +61,7 @@ class DualStreamModel(nn.Module):
         multilayer=False,
         grl_stream_hidden_dims=None,
         grl_locations=None,
+        domain_classifier_type='dann',
     ):
         """
         Args:
@@ -133,6 +134,22 @@ class DualStreamModel(nn.Module):
             act_name="gelu",
         )
 
+        # ─── Domain classifier type (DANN o CDAN) ──────────────────────
+        dtype = str(domain_classifier_type).lower()
+        if dtype not in {"dann", "cdan"}:
+            raise ValueError(
+                f"DOMAIN_CLASSIFIER_TYPE inválido: {domain_classifier_type!r}. "
+                f"Válidos: {{'dann', 'cdan'}}"
+            )
+        self.domain_classifier_type = dtype
+
+        # CDAN solo soporta "fused" (los streams no tienen tag logits propios)
+        if dtype == "cdan" and set(self.grl_locations) != {"fused"}:
+            raise ValueError(
+                f"CDAN solo soporta GRL_LOCATIONS=['fused'], "
+                f"recibido: {{self.grl_locations}}"
+            )
+
         # ─── Domain classifiers (solo para locations activas) ──────────
         if grl_stream_hidden_dims is None:
             stream_hidden = list(hidden)
@@ -150,8 +167,15 @@ class DualStreamModel(nn.Module):
                 dropout, act_name="relu",
             )
         if "fused" in self.grl_locations:
+            # DANN: input = fusion_dim
+            # CDAN: input = fusion_dim * num_classes (outer product f ⊗ softmax)
+            if self.domain_classifier_type == "cdan":
+                fused_in = self.fusion_dim * num_classes
+            else:
+                fused_in = self.fusion_dim
+
             self.domain_classifier = create_mlp_head(
-                [self.fusion_dim] + hidden + [num_domains],
+                [fused_in] + hidden + [num_domains],
                 dropout, act_name="relu",
             )
 
@@ -201,11 +225,21 @@ class DualStreamModel(nn.Module):
                 )
             )
         if "fused" in self.grl_locations:
-            domain_logits_list.append(
-                self.domain_classifier(
-                    grad_reverse(fused, lambda_=self.grl_lambda)
+            if self.domain_classifier_type == "cdan":
+                # f ⊗ softmax(tag_logits) con GRL sobre fused
+                tag_probs = F.softmax(tag_logits, dim=-1)             # (B, C)
+                fused_rev = grad_reverse(fused, lambda_=self.grl_lambda)
+                outer = torch.einsum("bd,bc->bdc", fused_rev, tag_probs)
+                cdan_input = outer.reshape(fused_rev.size(0), -1)
+                domain_logits_list.append(
+                    self.domain_classifier(cdan_input)
                 )
-            )
+            else:
+                domain_logits_list.append(
+                    self.domain_classifier(
+                        grad_reverse(fused, lambda_=self.grl_lambda)
+                    )
+                )
 
         if return_domain_logits:
             return tuple([tag_logits] + domain_logits_list)
@@ -281,6 +315,7 @@ def create_dual_stream_model(
     multilayer: bool = False,
     grl_stream_hidden_dims=None,
     grl_locations=None,
+    domain_classifier_type: str = "dann",
 ):
     fusion_config = {}
     if fusion_type == "attention_pooling" and fusion_hidden_dim is not None:
@@ -302,4 +337,5 @@ def create_dual_stream_model(
         multilayer=multilayer,
         grl_stream_hidden_dims=grl_stream_hidden_dims,
         grl_locations=grl_locations,
+        domain_classifier_type=domain_classifier_type,
     )
