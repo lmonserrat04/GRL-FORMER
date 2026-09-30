@@ -85,7 +85,7 @@ def _cache_path(config: dict, kind: str, src_tag: str) -> Path:
 def compute_all(config: dict) -> dict:
     from data.loaders.pcc_utils import (
         compute_pcc_tangent_batch,
-        compute_pcc_vector,
+        compute_pcc_vector_np,
     )
 
     atlas = config["ATLAS"]
@@ -138,10 +138,7 @@ def compute_all(config: dict) -> dict:
     if kind == "tangent":
         vectors = compute_pcc_tangent_batch(all_ts)
     elif kind == "pearson":
-        vecs = [
-            compute_pcc_vector(np.asarray(x.T)).numpy()
-            for x in all_ts
-        ]
+        vecs = [compute_pcc_vector_np(np.asarray(x.T)) for x in all_ts]
         vectors = np.stack(vecs).astype(np.float32)
     else:
         raise ValueError(f"PCC_KIND desconocido: {kind!r}")

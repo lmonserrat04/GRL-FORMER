@@ -1,4 +1,4 @@
-RUN_NAME: grl_interp_pearson
+RUN_NAME: grl_raw_tangent
 RAW_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200
 INTERP_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp
 CONNECTIVITY_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_connectivity
@@ -18,11 +18,8 @@ FACTORS:
 MAX_SEQ_LEN: 116
 STRATIFY_BY_SITE: false
 USE_WEIGHTED_SAMPLER: false
-
-USE_INTERP: true
-PCC_KIND: pearson
-
-
+USE_INTERP: false
+PCC_KIND: tangent
 SEED: 42
 N_FOLDS: 5
 TST1:
@@ -114,4 +111,3 @@ CHECKPOINTS:
   FINETUNE: best_finetuned_model
 EVAL_PROTOCOL: loso
 N_JOBS: 4
-PCC_KIND: tangent
