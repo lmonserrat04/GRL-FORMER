@@ -12,3 +12,4 @@ test_pipeline.py
 .hypothesis/
 experiments_*/
 *.rar
+data/datasets/ABIDE_pcp/
