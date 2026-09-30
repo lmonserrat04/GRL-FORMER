@@ -16,8 +16,13 @@ Conectividad:
     PCC_KIND = "tangent"  → nilearn ConnectivityMeasure, batch, cacheable
     PCC_KIND = "pearson"  → legacy, por sujeto
 
+Fuente de .1D:
+    USE_INTERP = True   → carga de INTERP_PATH con prefix=PREFIX ("interp_")
+    USE_INTERP = False  → carga de RAW_PATH sin prefix
+
 Cache en disco:
-    {CONNECTIVITY_PATH}/connectivity_{kind}_{atlas}_T{max_seq_len}.npz
+    {CONNECTIVITY_PATH}/connectivity_{kind}_{atlas}_T{max_seq_len}_{src}.npz
+    donde src ∈ {"raw", "interp"}.
     Si existe y cubre todos los FILE_IDs válidos, se carga directo.
     Si no, se calcula y se guarda automáticamente.
 """
@@ -49,7 +54,11 @@ _DATA_CACHE = {}
 # Cache de conectividad en disco
 # ──────────────────────────────────────────────────────────────────────
 
-def _connectivity_cache_path(config: dict) -> Path | None:
+def _src_tag(use_interp: bool) -> str:
+    return "interp" if use_interp else "raw"
+
+
+def _connectivity_cache_path(config: dict, use_interp: bool) -> Path | None:
     """Devuelve el path del .npz de cache, o None si CONNECTIVITY_PATH no está."""
     cache_dir = config.get("CONNECTIVITY_PATH")
     if not cache_dir:
@@ -57,11 +66,12 @@ def _connectivity_cache_path(config: dict) -> Path | None:
     kind = config.get("PCC_KIND", "tangent")
     atlas = config["ATLAS"]
     max_seq_len = int(config["MAX_SEQ_LEN"])
-    return Path(cache_dir) / f"connectivity_{kind}_{atlas}_T{max_seq_len}.npz"
+    src = _src_tag(use_interp)
+    return Path(cache_dir) / f"connectivity_{kind}_{atlas}_T{max_seq_len}_{src}.npz"
 
 
 def _load_connectivity_cache(
-    config: dict, valid_file_ids: list[str]
+    config: dict, use_interp: bool, valid_file_ids: list[str]
 ) -> np.ndarray | None:
     """
     Intenta cargar el cache de conectividad.
@@ -71,7 +81,7 @@ def _load_connectivity_cache(
       - No existe el .npz
       - Alguno de los valid_file_ids no está en el cache
     """
-    path = _connectivity_cache_path(config)
+    path = _connectivity_cache_path(config, use_interp)
     if path is None or not path.exists():
         return None
 
@@ -81,7 +91,7 @@ def _load_connectivity_cache(
 
     missing = [fid for fid in valid_file_ids if fid not in idx]
     if missing:
-        print(f"⚠ Cache incompleto: faltan {len(missing)} FILE_IDs. "
+        print(f"⚠ Cache incompleto ({len(missing)} FILE_IDs faltantes). "
               f"Se recalculará la conectividad.")
         return None
 
@@ -91,6 +101,7 @@ def _load_connectivity_cache(
 
 def _save_connectivity_cache(
     config: dict,
+    use_interp: bool,
     file_ids: list[str],
     subject_ids: np.ndarray,
     site_ids: np.ndarray,
@@ -100,17 +111,18 @@ def _save_connectivity_cache(
     """Guarda el .npz de conectividad. Devuelve el path."""
     from datetime import datetime
 
-    path = _connectivity_cache_path(config)
+    path = _connectivity_cache_path(config, use_interp)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     meta = {
-        "atlas":         config["ATLAS"],
-        "n_rois":        config["N_ROIS"],
-        "kind":          config.get("PCC_KIND", "tangent"),
-        "max_seq_len":   int(config["MAX_SEQ_LEN"]),
+        "atlas": config["ATLAS"],
+        "n_rois": config["N_ROIS"],
+        "kind": config.get("PCC_KIND", "tangent"),
+        "src_tag": _src_tag(use_interp),
+        "max_seq_len": int(config["MAX_SEQ_LEN"]),
         "min_timesteps": int(config["MIN_TIMESTEPS"]),
-        "n_subjects":    len(file_ids),
-        "timestamp":     datetime.now().isoformat(),
+        "n_subjects": len(file_ids),
+        "timestamp": datetime.now().isoformat(),
     }
 
     np.savez_compressed(
@@ -253,13 +265,14 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
 
     # ─── Conectividad: cache → calcular → guardar ──────────────────
     kind = config.get("PCC_KIND", "tangent")
-    pcc = _load_connectivity_cache(config, file_ids)
+    pcc = _load_connectivity_cache(config, use_interp, file_ids)
 
     if pcc is not None:
-        print(f"✓ Conectividad ({kind}) cargada de cache: "
-              f"{_connectivity_cache_path(config)}")
+        print(f"✓ Conectividad ({kind}, {_src_tag(use_interp)}) "
+              f"cargada de cache: {_connectivity_cache_path(config, use_interp)}")
     else:
-        print(f"Calculando conectividad ({kind}) para {len(file_ids)} sujetos...")
+        print(f"Calculando conectividad ({kind}, {_src_tag(use_interp)}) "
+              f"para {len(file_ids)} sujetos...")
 
         if kind == "tangent":
             pcc = compute_pcc_tangent_batch(ts_array)
@@ -279,7 +292,7 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
         # Auto-guardar cache
         try:
             saved = _save_connectivity_cache(
-                config, file_ids, subj_arr, sites_arr, labels_arr, pcc
+                config, use_interp, file_ids, subj_arr, sites_arr, labels_arr, pcc
             )
             print(f"✓ Cache guardado en: {saved}")
         except Exception as e:

@@ -1,9 +1,11 @@
 """
 Precomputa y guarda los vectores de conectividad (tangent o pearson).
 
+Lee de RAW_PATH o INTERP_PATH según USE_INTERP.
+
 Flujo:
   1. Leer CSV
-  2. Cargar .1D interpolados (de INTERP_PATH)
+  2. Cargar .1D desde RAW_PATH (USE_INTERP=false) o INTERP_PATH (USE_INTERP=true)
   3. Filtrar T<MIN_TIMESTEPS y ROIs constantes
   4. Crop a MAX_SEQ_LEN
   5. Calcular ConnectivityMeasure (kind=PCC_KIND, vectorize, discard_diagonal)
@@ -13,8 +15,9 @@ Uso:
     python data/preprocessing/compute_connectivity.py --config config/config.yaml
 
 Salida:
-    {CONNECTIVITY_PATH}/connectivity_{kind}_{atlas}_T{max_seq_len}.npz
-    con arrays: vectors, file_ids, subject_ids, site_ids, labels, meta
+    {CONNECTIVITY_PATH}/connectivity_{kind}_{atlas}_T{max_seq_len}_{src}.npz
+    con src = "raw" | "interp"
+    arrays: vectors, file_ids, subject_ids, site_ids, labels, meta
 """
 
 # --- sys.path bootstrap ---
@@ -47,19 +50,53 @@ def _has_constant_roi(ts: np.ndarray) -> bool:
     return bool((ts.std(axis=1) < 1e-8).any())
 
 
-def compute_all(config: dict) -> dict:
-    from data.loaders.pcc_utils import compute_pcc_tangent_batch, compute_pcc_vector
+def _resolve_source(config: dict) -> tuple[Path, str, str]:
+    """
+    Devuelve (src_path, prefix, src_tag) según USE_INTERP.
 
-    atlas        = config["ATLAS"]
-    n_rois       = config["N_ROIS"]
-    max_seq_len  = int(config["MAX_SEQ_LEN"])
-    min_ts       = int(config["MIN_TIMESTEPS"])
-    prefix       = config["PREFIX"]
-    kind         = config.get("PCC_KIND", "tangent")
+    src_tag ∈ {"raw", "interp"} se usa para nombrar el cache.
+    """
+    use_interp = bool(config.get("USE_INTERP", False))
 
-    src_path = Path(config["INTERP_PATH"])
+    if use_interp:
+        src_key = "INTERP_PATH"
+        prefix = config.get("PREFIX", "interp_")
+        src_tag = "interp"
+    else:
+        src_key = "RAW_PATH"
+        prefix = ""
+        src_tag = "raw"
+
+    src_path = Path(config[src_key])
     if not src_path.exists():
-        raise FileNotFoundError(f"INTERP_PATH no existe: {src_path}")
+        raise FileNotFoundError(f"{src_key} no existe: {src_path}")
+
+    return src_path, prefix, src_tag
+
+
+def _cache_path(config: dict, kind: str, src_tag: str) -> Path:
+    out_dir = Path(config["CONNECTIVITY_PATH"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    atlas = config["ATLAS"]
+    max_seq_len = int(config["MAX_SEQ_LEN"])
+    return out_dir / f"connectivity_{kind}_{atlas}_T{max_seq_len}_{src_tag}.npz"
+
+
+def compute_all(config: dict) -> dict:
+    from data.loaders.pcc_utils import (
+        compute_pcc_tangent_batch,
+        compute_pcc_vector,
+    )
+
+    atlas = config["ATLAS"]
+    n_rois = config["N_ROIS"]
+    max_seq_len = int(config["MAX_SEQ_LEN"])
+    min_ts = int(config["MIN_TIMESTEPS"])
+    kind = config.get("PCC_KIND", "tangent")
+
+    src_path, prefix, src_tag = _resolve_source(config)
+
+    print(f"Fuente:      {src_path}  (prefix={prefix!r}, tag={src_tag})")
 
     df = pd.read_csv(config["CSV_PATH"])
     label_col = config["LABEL_COL"]
@@ -67,7 +104,7 @@ def compute_all(config: dict) -> dict:
     ts_list, file_ids, subj_ids, sites, labels = [], [], [], [], []
     counts = {"ok": 0, "missing": 0, "short": 0, "const_roi": 0}
 
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="Cargando .1D interp"):
+    for _, row in tqdm(df.iterrows(), total=len(df), desc=f"Leyendo .1D de {src_path.name}"):
         fname = f"{prefix}{row['FILE_ID']}_rois_{atlas}.1D"
         fpath = src_path / fname
         if not fpath.exists():
@@ -85,7 +122,7 @@ def compute_all(config: dict) -> dict:
             counts["const_roi"] += 1
             continue
 
-        ts_list.append(arr)                        # (T, R) ya cropeado
+        ts_list.append(arr)                        # (T, R)
         file_ids.append(str(row["FILE_ID"]))
         subj_ids.append(int(row["SUB_ID"]))
         sites.append(str(row["SITE_ID"]))
@@ -99,24 +136,31 @@ def compute_all(config: dict) -> dict:
     print(f"Calculando conectividad kind={kind} para {all_ts.shape[0]} sujetos...")
 
     if kind == "tangent":
-        vectors = compute_pcc_tangent_batch(all_ts, n_jobs=int(config.get('N_JOBS', 4)))
+        vectors = compute_pcc_tangent_batch(all_ts)
     elif kind == "pearson":
-        vecs = [compute_pcc_vector(ts).numpy()
-                for ts in [np.asarray(x.T) for x in all_ts]]
+        vecs = [
+            compute_pcc_vector(np.asarray(x.T)).numpy()
+            for x in all_ts
+        ]
         vectors = np.stack(vecs).astype(np.float32)
     else:
         raise ValueError(f"PCC_KIND desconocido: {kind!r}")
 
     return {
-        "vectors":    vectors,
-        "file_ids":   np.array(file_ids),
+        "vectors": vectors,
+        "file_ids": np.array(file_ids),
         "subject_ids": np.array(subj_ids, dtype=np.int64),
-        "site_ids":   np.array(sites),
-        "labels":     np.array(labels, dtype=np.int64),
-        "counts":     counts,
+        "site_ids": np.array(sites),
+        "labels": np.array(labels, dtype=np.int64),
+        "counts": counts,
+        "src_tag": src_tag,
         "meta": {
-            "atlas": atlas, "n_rois": n_rois, "kind": kind,
-            "max_seq_len": max_seq_len, "min_timesteps": min_ts,
+            "atlas": atlas,
+            "n_rois": n_rois,
+            "kind": kind,
+            "src_tag": src_tag,
+            "max_seq_len": max_seq_len,
+            "min_timesteps": min_ts,
             "n_subjects": len(ts_list),
             "timestamp": datetime.now().isoformat(),
         },
@@ -124,13 +168,9 @@ def compute_all(config: dict) -> dict:
 
 
 def save_cache(result: dict, config: dict) -> Path:
-    out_dir = Path(config["CONNECTIVITY_PATH"])
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    atlas = config["ATLAS"]
     kind = config.get("PCC_KIND", "tangent")
-    max_seq_len = int(config["MAX_SEQ_LEN"])
-    path = out_dir / f"connectivity_{kind}_{atlas}_T{max_seq_len}.npz"
+    src_tag = result["src_tag"]
+    path = _cache_path(config, kind, src_tag)
 
     np.savez_compressed(
         path,
@@ -148,9 +188,9 @@ def main(args):
     with open(args.config, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    print(f"PCC_KIND:   {config.get('PCC_KIND', 'tangent')}")
-    print(f"INTERP:     {config['INTERP_PATH']}")
-    print(f"CACHE OUT:  {config['CONNECTIVITY_PATH']}")
+    print(f"USE_INTERP:    {config.get('USE_INTERP')}")
+    print(f"PCC_KIND:      {config.get('PCC_KIND', 'tangent')}")
+    print(f"CACHE OUT:     {config['CONNECTIVITY_PATH']}")
 
     result = compute_all(config)
     path = save_cache(result, config)

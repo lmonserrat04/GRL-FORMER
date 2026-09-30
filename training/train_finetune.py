@@ -28,6 +28,7 @@ def train_epoch(model, loader, optimizer, task, device):
         tag_loss, domain_loss = task.execution_step(
             model, ts, pcc, y, domain_targets=site,
         )
+        
         w = model._domain_weight if hasattr(model, "_domain_weight") else 1.0
         loss = tag_loss + w * domain_loss
 

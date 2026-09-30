@@ -67,6 +67,9 @@ def _train_epoch(tst1, tst2, task, loader, optimizer, device, trainable):
         ts = batch["timeseries"].to(device)
         pcc = batch["pcc_vector"].to(device)
 
+        # Forward pass en los transformers, aun no se esta finetuneando pero se hace forward
+        # en modo finetune  
+
         with torch.no_grad():
             h_ts = tst1(ts, mode='finetune')
         h_fc = tst2(pcc, mode='finetune')

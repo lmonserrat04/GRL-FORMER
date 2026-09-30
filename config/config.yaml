@@ -1,4 +1,4 @@
-RUN_NAME: grl_interp
+RUN_NAME: grl_interp_pearson
 RAW_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200
 INTERP_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp
 CONNECTIVITY_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_connectivity
@@ -18,7 +18,11 @@ FACTORS:
 MAX_SEQ_LEN: 116
 STRATIFY_BY_SITE: false
 USE_WEIGHTED_SAMPLER: false
+
 USE_INTERP: true
+PCC_KIND: pearson
+
+
 SEED: 42
 N_FOLDS: 5
 TST1:
