@@ -21,6 +21,14 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
+
+
+def _shuffle_generator(seed: int = 42) -> torch.Generator:
+    """Generator con seed fija para DataLoader shuffle determinista."""
+    g = torch.Generator()
+    g.manual_seed(seed)
+    return g
+
 _DATA_CACHE = {}
 
 from data.preprocessing.splitters import (
@@ -300,7 +308,7 @@ def get_finetune_loaders(
     )
 
     pin = torch.cuda.is_available()
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, generator=_shuffle_generator(seed),
                               drop_last=True,
                               num_workers=num_workers, pin_memory=pin)
     val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
@@ -356,7 +364,7 @@ def get_single_split_loaders(
     test_ds  = TwoTSTDataset(ts[test_idx],  pcc[test_idx],  labels[test_idx])
 
     pin = torch.cuda.is_available()
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, generator=_shuffle_generator(seed),
                               drop_last=True, num_workers=num_workers, pin_memory=pin)
     val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                               num_workers=num_workers, pin_memory=pin)
