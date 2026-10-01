@@ -58,13 +58,15 @@ class TransformerTS(nn.Module):
         dim_feedforward=2048,
         dropout=0.1,
         max_seq_len=200,
-        use_cls_token=True
+        use_cls_token=True,
+        local_attn_window=None,
     ):
         super().__init__()
 
         self.n_rois = n_rois
         self.emb_dim = emb_dim
         self.use_cls_token = use_cls_token
+        self.local_attn_window = local_attn_window
 
         # Input Embedding Layer: Maps ROI features at each time point to the embedding space
         self.input_embedding = nn.Linear(n_rois, emb_dim)
@@ -106,6 +108,50 @@ class TransformerTS(nn.Module):
 
         self._init_weights()
 
+    def _local_attn_mask(self, seq_len: int, device) -> torch.Tensor | None:
+        """
+        Máscara booleana (seq_len, seq_len) para local attention.
+
+        Convención de nn.Transformer: True = posición NO permitida (masked).
+
+        Reglas:
+          - Si self.local_attn_window is None → devuelve None (atención global).
+          - Si use_cls_token=True, el token 0 (CLS) atiende y es atendido
+            por TODOS (su fila y columna son 0 / False).
+          - El resto de timesteps solo atienden a ±k vecinos (excluyendo CLS
+            en las filas de timesteps, pero permitiendo ver CLS).
+
+        Args:
+            seq_len: T + (1 si use_cls_token else 0).
+            device:  device del tensor.
+
+        Returns:
+            mask: (seq_len, seq_len) bool  — o None si local_attn_window is None.
+        """
+        if self.local_attn_window is None:
+            return None
+
+        k = int(self.local_attn_window)
+        mask = torch.ones((seq_len, seq_len), dtype=torch.bool, device=device)
+
+        offset = 1 if self.use_cls_token else 0
+        n_tokens = seq_len - offset
+
+        # Para cada timestep i (0-indexado tras CLS), permite
+        # posiciones [i - k, i + k] (clamp a [0, n_tokens - 1]).
+        # Se aplica sobre las filas [offset:, offset:].
+        for i in range(n_tokens):
+            lo = max(0, i - k)
+            hi = min(n_tokens - 1, i + k)
+            mask[offset + i, offset + lo : offset + hi + 1] = False
+
+        # El CLS atiende y es atendido por todos: fila 0 y columna 0 en False
+        if self.use_cls_token:
+            mask[0, :] = False
+            mask[:, 0] = False
+
+        return mask
+
     def _init_weights(self):
         """Initialize weights"""
         for module in self.modules():
@@ -137,8 +183,12 @@ class TransformerTS(nn.Module):
         # Positional Encoding
         x = self.pos_encoder(x)
 
+        # Local attention mask (None si local_attn_window is None)
+        seq_len_eff = x.size(1)
+        attn_mask = self._local_attn_mask(seq_len_eff, x.device)
+
         # Transformer Encoding
-        x = self.transformer_encoder(x)
+        x = self.transformer_encoder(x, mask=attn_mask)
         x = self.norm(x)
 
         if mode == 'finetune':
@@ -248,7 +298,8 @@ def create_transformer_ts(config=None):
         'dim_feedforward': 2048,
         'dropout': 0.1,
         'max_seq_len': 200,
-        'use_cls_token': True
+        'use_cls_token': True,
+        'local_attn_window': None,
     }
 
     if config is not None:

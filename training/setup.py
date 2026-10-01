@@ -63,7 +63,8 @@ def _tst1_cfg(c):
     return {"n_rois": c["N_ROIS"], "emb_dim": t["D_MODEL"],
             "n_layers": t["NUM_ENCODER_LAYERS"], "n_heads": t["N_HEADS"],
             "dim_feedforward": t["DIM_FEEDFORWARD"], "dropout": t["ENC_DROP"],
-            "max_seq_len": c["MAX_SEQ_LEN"], "use_cls_token": t["USE_CLS_TOKEN"]}
+            "max_seq_len": c["MAX_SEQ_LEN"], "use_cls_token": t["USE_CLS_TOKEN"],
+            "local_attn_window": t.get("LOCAL_ATTN_WINDOW", None)}
 
 
 def _tst2_cfg(c):
