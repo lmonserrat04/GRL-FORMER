@@ -156,8 +156,10 @@ def main():
         config = yaml.safe_load(f)
 
     config = create_experiment_dir(config, args.config)
-    torch.manual_seed(config["SEED"])
-    np.random.seed(config["SEED"])
+
+    # Seed determinista (usa el helper que aplica a random, numpy, torch, cuda)
+    from utils.seed import set_seed
+    set_seed(config["SEED"])
 
     return run_pipeline(config)
 
