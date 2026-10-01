@@ -183,9 +183,14 @@ class TransformerTS(nn.Module):
         # Positional Encoding
         x = self.pos_encoder(x)
 
-        # Local attention mask (None si local_attn_window is None)
-        seq_len_eff = x.size(1)
-        attn_mask = self._local_attn_mask(seq_len_eff, x.device)
+        # Local attention: aplicar SOLO en finetune.
+        # En pretrain se usa atención global (para no romper el pretrain
+        # del checkpoint base, que se entrenó sin máscara local).
+        if mode == 'finetune' and self.local_attn_window is not None:
+            seq_len_eff = x.size(1)
+            attn_mask = self._local_attn_mask(seq_len_eff, x.device)
+        else:
+            attn_mask = None
 
         # Transformer Encoding
         x = self.transformer_encoder(x, mask=attn_mask)
