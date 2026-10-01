@@ -12,3 +12,7 @@ test_pipeline.py
 .hypothesis/
 experiments_*/
 *.rar
+
+experiments_multiseed_twotst/
+experiments_multiseed_baseline/
+experiments_twotst_original/
