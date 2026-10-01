@@ -30,6 +30,12 @@ def train_epoch(model, loader, optimizer, task, device):
     return total / len(loader)
 
 def validate(model, loader, task, device):
+    """
+    Corre validación y devuelve (avg_loss, metrics, raw_labels, raw_preds, raw_probs).
+
+    Los arrays crudos son a nivel de ventana (n_test,), sin agregar.
+    Permiten calcular el threshold óptimo de Youden sobre val.
+    """
     model.eval(); total = 0.0
     preds, labels, probs = [], [], []
     with torch.no_grad():
@@ -37,13 +43,17 @@ def validate(model, loader, task, device):
             ts = batch["timeseries"].to(device)
             pcc = batch["pcc_vector"].to(device)
             y = batch["label"].to(device)
-            logits,loss = task.execution_step(model, ts, pcc, y, return_logits = True)
+            logits, loss = task.execution_step(model, ts, pcc, y, return_logits=True)
             total += loss.item()
             p = torch.softmax(logits, dim=1)[:, 1]
             preds.extend(torch.argmax(logits, dim=1).cpu().numpy())
             labels.extend(y.cpu().numpy())
             probs.extend(p.cpu().numpy())
-    return total / len(loader), compute_metrics(np.array(labels), np.array(preds), np.array(probs))
+    labels = np.array(labels)
+    preds = np.array(preds)
+    probs = np.array(probs)
+    metrics = compute_metrics(labels, preds, probs)
+    return total / len(loader), metrics, labels, preds, probs
 
 
 def finetune_fold(config, fold_idx, save_dir=None):
@@ -89,7 +99,7 @@ def finetune_fold(config, fold_idx, save_dir=None):
         for epoch in tepoch:
             tepoch.set_description(f"Finetune fold {fold_idx} | Epoch {epoch}")
             tl = train_epoch(model, train_loader, optimizer, task, device)
-            vl, vm = validate(model, val_loader, task, device)
+            vl, vm, _, _, _ = validate(model, val_loader, task, device)
             scheduler.step()
             auc = vm["auc"]
             tepoch.set_postfix(train=f"{tl:.4f}", val=f"{vl:.4f}", auc=f"{auc:.4f}")
@@ -105,34 +115,80 @@ def finetune_fold(config, fold_idx, save_dir=None):
 
     if best_state: model.load_state_dict(best_state)
 
+    # ─── Predicciones crudas en VAL (para Youden) ──────────────────
+    _, vm_final, val_labels, val_preds, val_probs = validate(model, val_loader, task, device)
+
+    # Threshold óptimo por Youden's J sobre val
+    from sklearn.metrics import roc_curve
+    if len(np.unique(val_labels)) > 1:
+        fpr, tpr, thr = roc_curve(val_labels, val_probs)
+        j = tpr - fpr
+        optimal_thr = float(thr[j.argmax()])
+    else:
+        optimal_thr = 0.5
+
     # ─── Test + agregación subject-level ─────────────────────────────
     model.eval()
-    preds, labels, probs = [], [], []
+    test_preds, test_labels, test_probs = [], [], []
     with torch.no_grad():
         for batch in test_loader:
             ts = batch["timeseries"].to(device)
             pcc = batch["pcc_vector"].to(device)
             y = batch["label"].to(device)
             logits = model(ts, pcc)
-            probs.extend(torch.softmax(logits, dim=1)[:, 1].cpu().numpy())
-            preds.extend(torch.argmax(logits, dim=1).cpu().numpy())
-            labels.extend(y.cpu().numpy())
+            test_probs.extend(torch.softmax(logits, dim=1)[:, 1].cpu().numpy())
+            test_preds.extend(torch.argmax(logits, dim=1).cpu().numpy())
+            test_labels.extend(y.cpu().numpy())
 
-    si = split_info["subject_indices"]; ti = split_info["test_idx"]
-    n_subj = len(np.unique(si[ti]))
+    test_labels = np.array(test_labels)
+    test_preds = np.array(test_preds)
+    test_probs = np.array(test_probs)
+
+    si = split_info["subject_indices"]
+    ti = split_info["test_idx"]
+
+    # SUB_ID por muestra de test
+    test_subject_ids = si[ti]
+
+    n_subj = len(np.unique(test_subject_ids))
     if len(ti) > n_subj:
         yt, yp, ypr = aggregate_window_predictions_to_subject_level(
-            labels, preds, probs, ti, si, strategy=config.get("SUBJECT_AGG", "majority_vote"))
+            test_labels.tolist(), test_preds.tolist(), test_probs.tolist(),
+            ti, si, strategy=config.get("SUBJECT_AGG", "majority_vote"))
         print(f"\n  Fold {fold_idx}: subject-level ({len(ti)} → {n_subj} sujetos)")
     else:
-        yt, yp, ypr = np.array(labels), np.array(preds), np.array(probs)
+        yt, yp, ypr = test_labels, test_preds, test_probs
 
     m = compute_metrics(yt, yp, ypr)
+    print(f"  Umbral óptimo (val, Youden J): {optimal_thr:.4f}")
     print(f"  AUC={m['auc']:.4f}  ACC={m['accuracy']:.4f}  Sens={m['sensitivity']:.4f}  Spec={m['specificity']:.4f}  F1={m['f1']:.4f}")
 
+    # ─── Guardado ────────────────────────────────────────────────────
     if save_dir is not None:
         save_dir = Path(save_dir); save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Modelo
         torch.save({"model_state_dict": model.state_dict(), "metrics": m},
                    save_dir / f"best_finetune_fold_{fold_idx}.pt")
+
+        # Predicciones crudas (ventana-level)
+        np.savez(
+            save_dir / f"preds_fold_{fold_idx}.npz",
+            # Test (ventana-level, sin agregar)
+            labels=test_labels,
+            probs=test_probs,
+            preds=test_preds,
+            # Metadatos para poder agregar a subject-level después
+            test_idx=ti,
+            subject_indices=si,
+            test_subject_ids=test_subject_ids,
+            # Val (para threshold)
+            val_labels=val_labels,
+            val_probs=val_probs,
+            val_preds=val_preds,
+            # Threshold
+            optimal_thr=np.array([optimal_thr]),
+        )
         print(f"  💾 best_finetune_fold_{fold_idx}.pt")
+        print(f"  💾 preds_fold_{fold_idx}.npz  (labels, probs, preds, test_subject_ids, val_*, optimal_thr)")
     return m
