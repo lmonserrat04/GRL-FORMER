@@ -1,4 +1,4 @@
-RUN_NAME: transformer_baseline
+RUN_NAME: twotst_original_loso_preds
 RAW_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200
 INTERP_PATH: ./data/datasets/ABIDE_pcp/cpac/filt_noglobal/rois_cc200_interp
 CSV_PATH: ./data/csv/data_train.csv
@@ -27,7 +27,6 @@ TST1:
   N_HEADS: 8
   ENC_DROP: 0.1
   USE_CLS_TOKEN: true
-  LOCAL_ATTN_WINDOW: null
 TST2:
   PCC_DIM: 19900
   D_MODEL: 256
@@ -38,15 +37,14 @@ TST2:
 DUAL_STREAM:
   FUSION_TYPE: attention_pooling
   NUM_CLASSES: 2
-FUSION:
-  ATTENTION_POOLING:
-    HIDDEN_DIM: 512
-MLP_HEAD:
+  CLASSIFIER_DROPOUT: 0.3
   MLP_DIMS:
   - 256
   - 64
   - 2
-  DROPOUT: 0
+FUSION:
+  ATTENTION_POOLING:
+    HIDDEN_DIM: 512
 PT_TST1:
   N_EPOCHS: 500
   BATCH_SIZE: 32
@@ -99,4 +97,14 @@ CHECKPOINTS:
   PT_FC: best_pt_fc_model
   CONT: best_cont_model
   FINETUNE: best_finetuned_model
-EVAL_PROTOCOL: kfold
+EVAL_PROTOCOL: loso
+CKPT_TST1: experiments/20260928_160330_transformer_baseline/checkpoints/best_pt_ts_fold_0.pt
+CKPT_TST2: experiments/20260928_160330_transformer_baseline/checkpoints/best_pt_fc_fold_0.pt
+CKPT_CONTRASTIVE: experiments/20260928_160330_transformer_baseline/checkpoints/contrastive_global.pt
+PCC_KIND: pearson
+MLP_HEAD:
+  MLP_DIMS:
+  - 256
+  - 64
+  - 2
+  DROPOUT: 0
