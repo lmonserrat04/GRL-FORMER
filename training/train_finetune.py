@@ -43,7 +43,9 @@ def validate(model, loader, task, device):
             preds.extend(torch.argmax(logits, dim=1).cpu().numpy())
             labels.extend(y.cpu().numpy())
             probs.extend(p.cpu().numpy())
-    return total / len(loader), compute_metrics(np.array(labels), np.array(preds), np.array(probs))
+    return (total / len(loader),
+            compute_metrics(np.array(labels), np.array(preds), np.array(probs)),
+            np.array(labels), np.array(preds), np.array(probs))
 
 
 def finetune_fold(config, fold_idx, save_dir=None):
@@ -89,7 +91,7 @@ def finetune_fold(config, fold_idx, save_dir=None):
         for epoch in tepoch:
             tepoch.set_description(f"Finetune fold {fold_idx} | Epoch {epoch}")
             tl = train_epoch(model, train_loader, optimizer, task, device)
-            vl, vm = validate(model, val_loader, task, device)
+            vl, vm, _, _, _ = validate(model, val_loader, task, device)
             scheduler.step()
             auc = vm["auc"]
             tepoch.set_postfix(train=f"{tl:.4f}", val=f"{vl:.4f}", auc=f"{auc:.4f}")
@@ -104,6 +106,16 @@ def finetune_fold(config, fold_idx, save_dir=None):
                     break
 
     if best_state: model.load_state_dict(best_state)
+
+    # ─── Predicciones de val (mejor modelo) + threshold Youden ────────
+    _, _, val_labels, val_preds, val_probs = validate(model, val_loader, task, device)
+    from sklearn.metrics import roc_curve
+    if len(np.unique(val_labels)) > 1:
+        fpr, tpr, thr = roc_curve(val_labels, val_probs)
+        optimal_thr = float(thr[(tpr - fpr).argmax()])
+    else:
+        optimal_thr = 0.5
+    print(f"  Umbral óptimo (val, Youden J): {optimal_thr:.4f}")
 
     # ─── Test + agregación subject-level ─────────────────────────────
     model.eval()
@@ -135,4 +147,21 @@ def finetune_fold(config, fold_idx, save_dir=None):
         torch.save({"model_state_dict": model.state_dict(), "metrics": m},
                    save_dir / f"best_finetune_fold_{fold_idx}.pt")
         print(f"  💾 best_finetune_fold_{fold_idx}.pt")
+
+        # Guardar predicciones crudas para análisis por sitio
+        test_subject_ids = np.asarray(si)[np.asarray(ti)]
+        np.savez(
+            save_dir / f"preds_fold_{fold_idx}.npz",
+            labels=np.array(labels),
+            probs=np.array(probs),
+            preds=np.array(preds),
+            test_idx=ti,
+            subject_indices=si,
+            test_subject_ids=test_subject_ids,
+            val_labels=val_labels,
+            val_probs=val_probs,
+            val_preds=val_preds,
+            optimal_thr=np.array([optimal_thr]),
+        )
+        print(f"  💾 preds_fold_{fold_idx}.npz")
     return m
