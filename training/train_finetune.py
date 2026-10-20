@@ -14,15 +14,24 @@ from data.loaders.dataloader import get_finetune_loaders
 from utils.metrics import compute_metrics, aggregate_window_predictions_to_subject_level
 
 
-def train_epoch(model, loader, optimizer, task, device):
+def train_epoch(model, loader, optimizer, task, device, site_weights=None):
     model.train()
     total = 0.0
     for batch in loader:
         ts = batch["timeseries"].to(device)
         pcc = batch["pcc_vector"].to(device)
         y = batch["label"].to(device)
+
+        sample_weights = None
+        if site_weights is not None:
+            site = batch["site_id"].to(device)
+            sample_weights = site_weights[site]
+
         optimizer.zero_grad()
-        loss = task.execution_step(model, ts, pcc, y)
+        loss = task.execution_step(
+            model, ts, pcc, y,
+            sample_weights=sample_weights,
+        )
         loss.backward()
         torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
         optimizer.step()
@@ -83,6 +92,38 @@ def finetune_fold(config, fold_idx, save_dir=None):
         eval_protocol=config.get("EVAL_PROTOCOL", "kfold"),
     )
 
+    # ─── Site weights (opcional) ─────────────────────────────────
+    site_weights = None
+    if config.get("FINETUNING", {}).get("USE_SITE_WEIGHTS", False):
+        from training.site_weights import (
+            compute_site_weight_vector,
+            summarize_site_weights,
+        )
+
+        train_ds = train_loader.dataset
+        val_ds = val_loader.dataset
+
+        all_sites = np.concatenate([train_ds.site_ids, val_ds.site_ids])
+        num_sites = int(all_sites.max()) + 1
+
+        w = compute_site_weight_vector(
+            site_ids=train_ds.site_ids,
+            num_sites=num_sites,
+            power=float(config["FINETUNING"].get("SITE_WEIGHT_POWER", 1.0)),
+            normalize=config["FINETUNING"].get("SITE_WEIGHT_NORMALIZE", "mean"),
+        )
+        site_weights = torch.from_numpy(w).float().to(device)
+
+        # Nombres de sitios para el print (si están disponibles)
+        site_to_idx = config.get("_SITE_TO_IDX") or {}
+        idx_to_site = {i: s for s, i in site_to_idx.items()} if site_to_idx else None
+        site_names = [idx_to_site.get(i, f"site_{i:02d}") for i in range(num_sites)] if idx_to_site else None
+
+        print(f"  Site weights computed (num_sites={num_sites}, "
+              f"power={float(config['FINETUNING'].get('SITE_WEIGHT_POWER', 1.0))}, "
+              f"normalize={config['FINETUNING'].get('SITE_WEIGHT_NORMALIZE', 'mean')})")
+        print(summarize_site_weights(w, site_names=site_names))
+
     epochs = phase["N_EPOCHS"]
     patience = phase.get("PATIENCE", 20)
     best_auc, best_state, pc = -1.0, None, 0
@@ -90,7 +131,8 @@ def finetune_fold(config, fold_idx, save_dir=None):
     with tqdm(range(1, epochs + 1), unit="epoch") as tepoch:
         for epoch in tepoch:
             tepoch.set_description(f"Finetune fold {fold_idx} | Epoch {epoch}")
-            tl = train_epoch(model, train_loader, optimizer, task, device)
+            tl = train_epoch(model, train_loader, optimizer, task, device,
+                             site_weights=site_weights)
             vl, vm, _, _, _ = validate(model, val_loader, task, device)
             scheduler.step()
             auc = vm["auc"]

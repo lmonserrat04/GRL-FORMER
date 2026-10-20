@@ -147,11 +147,13 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
 
 
 class TwoTSTDataset(Dataset):
-    def __init__(self, timeseries, pcc_vectors, labels,
+    def __init__(self, timeseries, pcc_vectors, labels, site_ids=None,
                  normalize_ts=True, normalize_pcc=True):
         self.timeseries = timeseries.astype(np.float32)
         self.pcc_vectors = pcc_vectors.astype(np.float32)
         self.labels = labels.astype(np.int64)
+        self.site_ids = (site_ids.astype(np.int64)
+                         if site_ids is not None else None)
 
         if normalize_ts:
             mean = self.timeseries.mean(axis=(1, 2), keepdims=True)
@@ -167,11 +169,14 @@ class TwoTSTDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        return {
+        item = {
             "timeseries": torch.from_numpy(self.timeseries[idx]),
             "pcc_vector": torch.from_numpy(self.pcc_vectors[idx]),
             "label":      torch.tensor(self.labels[idx], dtype=torch.long),
         }
+        if self.site_ids is not None:
+            item["site_id"] = torch.tensor(self.site_ids[idx], dtype=torch.long)
+        return item
 
 
 class PretrainTSDataset(Dataset):
@@ -249,7 +254,12 @@ def get_finetune_loaders(
     data = load_raw_data(config)
     labels = data["labels"]
     subject_indices = data["subject_indices"]
-    site_ids = data["site_ids"]
+    site_ids_str = data["site_ids"]              # strings: "PITT", "NYU", ...
+
+    # Mapeo estable site_str → site_idx (orden alfabético, igual en todos los folds)
+    unique_sites = sorted(set(str(s) for s in site_ids_str))
+    site_to_idx = {s: i for i, s in enumerate(unique_sites)}
+    site_ids = np.array([site_to_idx[str(s)] for s in site_ids_str], dtype=np.int64)
 
     if eval_protocol == "loso":
         if site_ids is None:
@@ -272,9 +282,12 @@ def get_finetune_loaders(
 
     ts, pcc = data["timeseries"], data["pcc_vectors"]
 
-    train_ds = TwoTSTDataset(ts[train_idx], pcc[train_idx], labels[train_idx])
-    val_ds   = TwoTSTDataset(ts[val_idx],   pcc[val_idx],   labels[val_idx])
-    test_ds  = TwoTSTDataset(ts[test_idx],  pcc[test_idx],  labels[test_idx])
+    train_ds = TwoTSTDataset(ts[train_idx], pcc[train_idx], labels[train_idx],
+                              site_ids=site_ids[train_idx])
+    val_ds   = TwoTSTDataset(ts[val_idx],   pcc[val_idx],   labels[val_idx],
+                              site_ids=site_ids[val_idx])
+    test_ds  = TwoTSTDataset(ts[test_idx],  pcc[test_idx],  labels[test_idx],
+                              site_ids=site_ids[test_idx])
 
     pin = torch.cuda.is_available()
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, generator=_shuffle_generator(seed),

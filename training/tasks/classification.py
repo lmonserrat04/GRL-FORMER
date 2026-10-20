@@ -10,6 +10,7 @@ Criterio: CrossEntropyLoss (Ec. 16 del paper).
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from models.dual_stream import DualStreamModel
 
@@ -27,6 +28,7 @@ class ClassificationTask:
         ts_batch: torch.Tensor,
         pcc_batch: torch.Tensor,
         targets: torch.Tensor,
+        sample_weights: torch.Tensor | None = None,
         return_logits : bool = False
     ) -> torch.Tensor | tuple:
         """
@@ -43,13 +45,22 @@ class ClassificationTask:
         ts_batch = ts_batch.to(self.device)
         pcc_batch = pcc_batch.to(self.device)
         targets = targets.to(self.device)
+        if sample_weights is not None:
+            sample_weights = sample_weights.to(self.device)
 
         logits = model(ts_batch, pcc_batch)
 
-        if return_logits: 
-            return logits , self.criterion(logits, targets)
+        if sample_weights is not None:
+            per_sample = F.cross_entropy(
+                logits, targets, reduction="none"
+            )
+            loss = (per_sample * sample_weights).mean()
         else:
-            return self.criterion(logits, targets)
+            loss = self.criterion(logits, targets)
+
+        if return_logits:
+            return logits, loss
+        return loss
 
 
 # ──────────────────────────────────────────────────────────────────────
