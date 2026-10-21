@@ -14,6 +14,7 @@ from .context import ExperimentContext
 from .tasks.reconstruction import ReconstructionTask
 from .tasks.classification import ClassificationTask
 from .tasks.contrastive import ProjectionHead
+from .losses import FocalLoss
 from .train_contrastive import build_contrastive_components
 
 
@@ -167,7 +168,28 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
         if p2 is not None:
             for p in model.proj_head_2.parameters(): p.requires_grad = False
 
-        task = ClassificationTask(device)
+        # ─── Criterion configurable (CE o FocalLoss) ──────────────
+        use_focal = bool(phase.get("USE_FOCAL_LOSS", False))
+        if use_focal:
+            focal_gamma = float(phase.get("FOCAL_GAMMA", 2.0))
+            focal_alpha = phase.get("FOCAL_ALPHA", None)
+            # alpha puede venir como None, scalar o lista por clase
+            if focal_alpha is not None:
+                if isinstance(focal_alpha, list):
+                    focal_alpha = torch.tensor(focal_alpha, dtype=torch.float32)
+                else:
+                    focal_alpha = float(focal_alpha)
+            criterion = FocalLoss(
+                alpha=focal_alpha,
+                gamma=focal_gamma,
+                reduction="mean",
+            )
+            print(f"  Loss: FocalLoss(gamma={focal_gamma}, alpha={focal_alpha})")
+        else:
+            criterion = None  # ClassificationTask usará CrossEntropyLoss por defecto
+            print(f"  Loss: CrossEntropyLoss")
+
+        task = ClassificationTask(device, criterion=criterion)
 
         train_loader, val_loader, _, _ = get_finetune_loaders(
             config, batch_size=phase["BATCH_SIZE"], num_workers=nw,

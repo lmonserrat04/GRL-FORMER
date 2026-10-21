@@ -17,9 +17,16 @@ from models.dual_stream import DualStreamModel
 class ClassificationTask:
     """CrossEntropy sobre los logits del DualStreamModel."""
 
-    def __init__(self, device):
+    def __init__(self, device, criterion=None):
+        """
+        Args:
+            device:    torch.device
+            criterion: función de pérdida opcional. Por defecto usa
+                       nn.CrossEntropyLoss(). Para focal loss, pasar
+                       training.losses.FocalLoss(...).
+        """
         self.device = device
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = criterion if criterion is not None else nn.CrossEntropyLoss()
 
     def execution_step(
         self,
