@@ -125,6 +125,17 @@ def main():
             s = summary[name]
             print(f"  {name:<12s}: {s['mean']:.4f} +/- {s['std']:.4f}  "
                   f"[{s['ci95_lower']:.4f}, {s['ci95_upper']:.4f}]")
+
+    print("\nAUC por sitio:")
+    print(f"  {'sitio':<12s} {'fold':>4s} {'n':>4s} {'ASD':>4s} {'TD':>4s} "
+          f"{'AUC':>7s} {'ACC':>7s} {'Sens':>7s} {'Spec':>7s}")
+    for r in sorted(summary.get("per_site", []), key=lambda x: x["site"]):
+        auc_str = f"{r['auc']:.4f}" if r["auc_valid"] else "n/d"
+        print(f"  {r['site']:<12s} {r['fold_idx']:>4d} {r['n']:>4d} "
+              f"{r['n_asd']:>4d} {r['n_td']:>4d} {auc_str:>7s} "
+              f"{r['accuracy']:>7.4f} {r['sensitivity']:>7.4f} "
+              f"{r['specificity']:>7.4f}")
+
     print(f"\nResultados: {results_path}")
     print(f"AUC por sitio: {artifacts['site_auc_csv']}")
     print(f"Predicciones por sujeto: {artifacts['preds']}")

@@ -3,6 +3,13 @@
 Contiene únicamente lógica de training/eval/artefactos. La construcción de
 modelo, loaders y optimizador vive en `training.gnn_setup`; el entrypoint CLI
 vive en `scripts/train/run_gnn.py`.
+
+Artefactos por semilla (dentro del directorio del experimento):
+    - `preds_seed{seed}.npz`: probs/preds out-of-fold de todos los sujetos.
+    - `site_auc.csv`, `site_auc.json`, `site_auc.md`: AUC por sitio.
+    - `training_curves.json`: train/val loss y val AUC por época y fold.
+    - `checkpoints/loss_history_fold_{i}.csv`: la misma curva, por fold.
+    - `checkpoints/preds_fold_{i}.npz`: predicciones y umbral de cada fold.
 """
 
 from __future__ import annotations
