@@ -110,8 +110,11 @@ class DualStreamModel(nn.Module):
             h_fc = self.proj_head_2(h_fc)
 
         # Logits de la rama temporal antes de fusionar. No se detachan: la
-        # pérdida auxiliar debe empujar a TST1 a ser discriminativo.
-        aux_logits = self.ts_classifier(h_ts) if self.ts_classifier is not None else None
+        # pérdida auxiliar debe empujar a TST1 a ser discriminativo. Solo se
+        # calculan si se van a usar (en test/validación no hacen falta).
+        aux_logits = None
+        if return_aux_logits and self.ts_classifier is not None:
+            aux_logits = self.ts_classifier(h_ts)
 
         # Fusión
         if return_attention and hasattr(self.fusion, 'forward'):
