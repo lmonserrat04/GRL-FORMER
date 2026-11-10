@@ -68,9 +68,12 @@ def train_epoch(model, loader, optimizer, task, device, t_use=None) -> float:
     for batch in loader:
         ts = _slice_ts(batch["timeseries"], t_use).to(device)
         y = batch["label"].to(device)
+        pcc = batch.get("pcc_matrix")
+        if pcc is not None:
+            pcc = pcc.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        loss = task.execution_step(model, ts, y)
+        loss = task.execution_step(model, ts, y, pcc_matrix=pcc)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(
             [p for p in model.parameters() if p.requires_grad], 1.0
@@ -91,8 +94,13 @@ def evaluate(model, loader, task, device, t_use=None):
     for batch in loader:
         ts = _slice_ts(batch["timeseries"], t_use).to(device)
         y = batch["label"].to(device)
+        pcc = batch.get("pcc_matrix")
+        if pcc is not None:
+            pcc = pcc.to(device)
 
-        logits, loss = task.execution_step(model, ts, y, return_logits=True)
+        logits, loss = task.execution_step(
+            model, ts, y, pcc_matrix=pcc, return_logits=True
+        )
         total += loss.item() * len(y)
         n += len(y)
         probs.extend(F.softmax(logits, dim=1)[:, 1].cpu().numpy())
@@ -202,8 +210,8 @@ def fit_fold(cfg: dict, fold_idx: int, ckpt_dir: Path) -> dict:
     n_test = len(test_loader.dataset)
     print(f"\n{'─' * 74}")
     print(f"Fold {fold_idx:2d} | {site:>10s} | train={n_train} val={n_val} test={n_test}")
-    print(f"  T={t_use} | d={g['D_MODEL']} | k={g['KNN']} | "
-          f"layers={g['NUM_LAYERS']} | stride={g['STRIDE']} | "
+    print(f"  T={t_use} | graph={g['GRAPH_MODE']} | d={g['D_MODEL']} | "
+          f"k={g['KNN']} | layers={g['NUM_LAYERS']} | stride={g['STRIDE']} | "
           f"chunk={g['TIME_CHUNK']}")
 
     best_auc, best_state, best_epoch, bad = -1.0, None, 0, 0

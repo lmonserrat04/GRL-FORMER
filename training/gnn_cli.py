@@ -48,6 +48,12 @@ def parse_args():
     p.add_argument("--weight-decay", type=float, default=None)
     p.add_argument("--t", type=int, default=None, help="Timesteps (default: GNN.T)")
     p.add_argument("--d-model", type=int, default=None)
+    p.add_argument(
+        "--graph-mode",
+        choices=["static_fc", "dynamic"],
+        default=None,
+        help="static_fc: PCC fija por sujeto; dynamic: top-k por timestep",
+    )
     p.add_argument("--knn", type=int, default=None)
     p.add_argument("--layers", type=int, default=None)
     p.add_argument("--dropout", type=float, default=None)
@@ -72,6 +78,7 @@ def main():
         "WEIGHT_DECAY": args.weight_decay,
         "T": args.t,
         "D_MODEL": args.d_model,
+        "GRAPH_MODE": args.graph_mode,
         "KNN": args.knn,
         "NUM_LAYERS": args.layers,
         "DROPOUT": args.dropout,
@@ -104,10 +111,14 @@ def main():
     print("=" * 78)
     print(f"GNN temporal | run={args.run_name} | seed={args.seed} | device={cfg['DEVICE']}")
     print(f"Sujetos={len(data['labels'])} | sitios={n_folds} | T={g['T']} | "
-          f"d={g['D_MODEL']} | k={g['KNN']} | layers={g['NUM_LAYERS']} | "
+          f"graph={g['GRAPH_MODE']} | d={g['D_MODEL']} | k={g['KNN']} | "
+          f"layers={g['NUM_LAYERS']} | "
           f"dropout={g['DROPOUT']} | stride={g['STRIDE']} | "
           f"chunk={g['TIME_CHUNK']} | batch={g['BATCH_SIZE']} | "
           f"epochs={g['N_EPOCHS']}")
+    if g["GRAPH_MODE"] == "static_fc":
+        print(f"PCC matrices cacheadas: {data['pcc_matrices'].shape} "
+              f"(float32, una por sujeto)")
     print(f"Folds: {folds}")
     print(f"Salida: {exp_dir}")
     print("=" * 78)

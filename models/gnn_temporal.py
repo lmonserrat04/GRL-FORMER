@@ -5,10 +5,11 @@ Sin LSTM, sin GRU y sin transformer. La dinámica temporal se resuelve
 procesando el grafo timestep a timestep con pesos compartidos:
 
     1. z-score por ROI sobre el tiempo  ->  z (B, T, R)
-    2. Para cada timestep t, grafo disperso k-NN dinámico:
-           e_uv(t)  = z_u(t) · z_v(t)
-           score_uv = |e_uv(t)|
-           top-k por nodo + aristas inversas   ->  E = 2·R·k
+    2. Grafo disperso por sujeto:
+       - `static_fc` (default): matriz PCC completa cacheada por sujeto,
+         top-k=10 vecinos por ROI según |PCC|. El grafo es fijo para todos los t.
+       - `dynamic`: top-k por timestep usando |z_u(t)·z_v(t)|.
+       En ambos casos se añaden aristas inversas -> E = 2·R·k.
     3. Cada arista lleva directamente e_uv(t). No hay ventana, media,
        desviación ni correlación temporal: ventana = 1.
     4. Para cada timestep t, una GNN de pesos compartidos actualiza:
@@ -112,22 +113,25 @@ class TemporalAttention(nn.Module):
 class GraphTemporalEncoder(nn.Module):
     """Convierte una serie BOLD (B,T,R) en un vector por ROI (B,R,d).
 
-    En cada timestep construye un grafo k-NN con los productos instantáneos
-    |z_u(t)·z_v(t)|, aplica la misma GNN y combina los timesteps con atención
+    El grafo puede ser estático por sujeto (`static_fc`: PCC de toda la serie
+    cacheada por el dataset, top-k fijo para todos los timesteps) o dinámico
+    (`dynamic`: top-k por timestep con |z_u(t)·z_v(t)|). En ambos casos la GNN
+    se aplica timestep a timestep y los resultados se combinan con atención
     temporal: un peso alpha_t por instante, compartido entre las ROIs. No hay
-    recurrencia: no se pasa estado oculto de un timestep al siguiente.
+    recurrencia.
     """
 
     def __init__(
         self,
         n_rois: int = 200,
         d_model: int = 16,
-        knn: int = 5,
+        knn: int = 10,
         num_layers: int = 2,
         dropout: float = 0.3,
         stride: int = 1,
         edge_dim: int = 1,
         time_chunk: int = 16,
+        graph_mode: str = "static_fc",
     ):
         super().__init__()
         self.n_rois = int(n_rois)
@@ -136,6 +140,12 @@ class GraphTemporalEncoder(nn.Module):
         self.stride = max(1, int(stride))
         self.edge_dim = int(edge_dim)
         self.time_chunk = max(1, int(time_chunk))
+        self.graph_mode = str(graph_mode)
+        if self.graph_mode not in {"static_fc", "dynamic"}:
+            raise ValueError(
+                "graph_mode debe ser 'static_fc' o 'dynamic', "
+                f"recibido {self.graph_mode!r}"
+            )
 
         self.node_in = nn.Linear(1, d_model)
         self.node_norm = nn.LayerNorm(d_model)
@@ -163,6 +173,37 @@ class GraphTemporalEncoder(nn.Module):
         v_idx = torch.cat([nbr, node], dim=-1).reshape(b, -1)    # emisor
         return u_idx, v_idx
 
+    @torch.no_grad()
+    def _build_static_graph(self, z: torch.Tensor):
+        """z: (B,T,R) -> (u_idx, v_idx) (B,E), fijo para todos los timesteps."""
+        b, _, r = z.shape
+        zc = z - z.mean(dim=1, keepdim=True)
+        zc = zc / zc.norm(dim=1, keepdim=True).clamp_min(1e-8)
+        corr = torch.bmm(zc.transpose(1, 2), zc)                 # (B,R,R)
+        corr = torch.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+        corr = corr.clamp(-1.0, 1.0)
+        return self._static_graph_from_pcc(corr)
+
+    @torch.no_grad()
+    def _static_graph_from_pcc(self, pcc: torch.Tensor):
+        """pcc: (B,R,R) -> (u_idx, v_idx) (B,E), fijo para todos los t."""
+        b, r, r2 = pcc.shape
+        if r != r2:
+            raise ValueError(f"PCC debe ser (B,R,R); recibido {tuple(pcc.shape)}")
+        if r != self.n_rois:
+            raise ValueError(f"n_rois={self.n_rois}, pero la PCC tiene R={r}")
+
+        score = pcc.abs()
+        score.diagonal(dim1=-2, dim2=-1).zero_()
+
+        k = max(1, min(self.knn, r - 1))
+        nbr = score.topk(k, dim=-1, sorted=False).indices        # (B,R,k)
+        node = torch.arange(r, device=pcc.device).view(1, r, 1).expand(b, r, k)
+
+        u_idx = torch.cat([node, nbr], dim=-1).reshape(b, -1)    # receptor
+        v_idx = torch.cat([nbr, node], dim=-1).reshape(b, -1)    # emisor
+        return u_idx, v_idx
+
     @staticmethod
     def _edge_values(z_t, u_idx, v_idx):
         """e_uv(t) = z_u(t)·z_v(t), sin media ni ventana: (B,E,1)."""
@@ -174,8 +215,13 @@ class GraphTemporalEncoder(nn.Module):
         self,
         z: torch.Tensor,
         return_temporal_attn: bool = False,
+        pcc_matrix: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        """z: (B,T,R) estandarizado -> H: (B,R,d) con atención temporal."""
+        """z: (B,T,R) estandarizado -> H: (B,R,d) con atención temporal.
+
+        `pcc_matrix` es la matriz PCC (B,R,R) ya cacheada por el dataset. Si se
+        omite, el modo `static_fc` la calcula desde `z` como fallback.
+        """
         b, t, r = z.shape
         if t < 1:
             raise ValueError("La serie debe tener al menos un timestep")
@@ -189,20 +235,46 @@ class GraphTemporalEncoder(nn.Module):
         h0 = self.node_norm(self.node_in(z.unsqueeze(-1)))       # (B,T,R,d)
         h0 = h0.index_select(1, times)                           # (B,Te,R,d)
 
+        # El grafo estático se calcula una sola vez por sujeto. Si el dataset
+        # ya cacheó la matriz PCC, se reutiliza directamente; el fallback
+        # recalcula la PCC desde z (útil en tests o inferencia sin cache).
+        static_u = static_v = None
+        if self.graph_mode == "static_fc":
+            if pcc_matrix is not None:
+                if pcc_matrix.dim() != 3 or pcc_matrix.shape[0] != b:
+                    raise ValueError(
+                        "pcc_matrix debe ser (B,R,R) con B="
+                        f"{b}; recibido {tuple(pcc_matrix.shape)}"
+                    )
+                pcc = pcc_matrix.to(device=z.device, dtype=z.dtype)
+                static_u, static_v = self._static_graph_from_pcc(pcc)
+            else:
+                static_u, static_v = self._build_static_graph(z) # (B,E)
+
         chunks: list[torch.Tensor] = []
 
         # Bloques de timesteps independientes: no hay mensajes entre tiempos.
-        # Cada timestep conserva su propio grafo dinámico y sus pesos compartidos.
+        # En `static_fc` el grafo es el mismo para todos los t; en `dynamic`
+        # cada timestep conserva su propio grafo.
         for start in range(0, te, self.time_chunk):
             stop = min(start + self.time_chunk, te)
             chunk = stop - start
+            n = b * chunk
             z_c = z.index_select(1, times[start:stop])           # (B,C,R)
-            z_f = z_c.reshape(b * chunk, r)                      # (B·C,R)
+            z_f = z_c.reshape(n, r)                              # (B·C,R)
 
-            u_idx, v_idx = self._build_graph(z_f)                # (B·C,E)
+            if self.graph_mode == "static_fc":
+                u_idx = static_u.unsqueeze(1).expand(
+                    b, chunk, -1
+                ).reshape(n, -1)                                 # (B·C,E)
+                v_idx = static_v.unsqueeze(1).expand(
+                    b, chunk, -1
+                ).reshape(n, -1)
+            else:
+                u_idx, v_idx = self._build_graph(z_f)            # (B·C,E)
+
             e = self._edge_values(z_f, u_idx, v_idx)             # (B·C,E,1)
 
-            n = b * chunk
             off = (torch.arange(n, device=z.device) * r).view(n, 1)
             lin_u = (off + u_idx).reshape(-1)
             lin_v = (off + v_idx).reshape(-1)
@@ -285,11 +357,12 @@ class TemporalGNN(nn.Module):
         self,
         n_rois: int = 200,
         d_model: int = 16,
-        knn: int = 5,
+        knn: int = 10,
         num_layers: int = 2,
         dropout: float = 0.3,
         stride: int = 1,
         time_chunk: int = 16,
+        graph_mode: str = "static_fc",
         clf_hidden: tuple[int, ...] = (32, 16),
         clf_dropout: float = 0.5,
         num_classes: int = 2,
@@ -300,6 +373,7 @@ class TemporalGNN(nn.Module):
         self.knn = int(knn)
         self.stride = max(1, int(stride))
         self.time_chunk = max(1, int(time_chunk))
+        self.graph_mode = str(graph_mode)
 
         self.encoder = GraphTemporalEncoder(
             n_rois=n_rois,
@@ -309,6 +383,7 @@ class TemporalGNN(nn.Module):
             dropout=dropout,
             stride=stride,
             time_chunk=time_chunk,
+            graph_mode=graph_mode,
         )
         self.classifier = NodeAttentionClassifier(
             d_model=d_model,
@@ -321,8 +396,13 @@ class TemporalGNN(nn.Module):
         self,
         x: torch.Tensor,
         return_temporal_attn: bool = False,
+        pcc_matrix: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        """x: (B,T,R) crudo -> H: (B,R,d) con atención temporal."""
+        """x: (B,T,R) crudo -> H: (B,R,d) con atención temporal.
+
+        `pcc_matrix` (B,R,R) es la PCC cacheada por el dataset; si no se pasa,
+        el encoder la calcula desde la serie como fallback.
+        """
         if x.dim() != 3:
             raise ValueError(f"Se espera (B, T, R); recibido {tuple(x.shape)}")
         if x.size(2) != self.n_rois:
@@ -331,9 +411,18 @@ class TemporalGNN(nn.Module):
         # Estandarización por ROI sobre el tiempo.
         z = x - x.mean(dim=1, keepdim=True)
         z = z / z.std(dim=1, keepdim=True, unbiased=False).clamp_min(1e-5)
-        return self.encoder(z, return_temporal_attn=return_temporal_attn)
+        return self.encoder(
+            z,
+            return_temporal_attn=return_temporal_attn,
+            pcc_matrix=pcc_matrix,
+        )
 
-    def forward(self, x: torch.Tensor, return_attn: bool = False):
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_attn: bool = False,
+        pcc_matrix: torch.Tensor | None = None,
+    ):
         """x: (B,T,R) → logits (B,2); opcionalmente alpha (B,R)."""
-        nodes = self.encode(x)
+        nodes = self.encode(x, pcc_matrix=pcc_matrix)
         return self.classifier(nodes, return_attn=return_attn)

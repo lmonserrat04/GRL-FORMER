@@ -110,9 +110,11 @@ FINETUNING:
 
 GNN:
   # Ventana = 1: cada arista usa e_uv(t) = z_u(t)·z_v(t), sin media ni correlación.
+  # GRAPH_MODE: static_fc = PCC fija por sujeto (top-k=10); dynamic = top-k por t.
   T: 116
   D_MODEL: 16
-  KNN: 5
+  GRAPH_MODE: static_fc
+  KNN: 10
   NUM_LAYERS: 2
   DROPOUT: 0.3
   STRIDE: 1

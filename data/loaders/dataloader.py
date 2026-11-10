@@ -2,7 +2,8 @@
 Data Loader Module — carga .1D + CSV en runtime, sin .pkl intermedio.
 
 Expone:
-    load_raw_data            → dict {timeseries, pcc_vectors, labels, subject_indices, site_ids}
+    load_raw_data            → dict {timeseries, pcc_vectors, pcc_matrices,
+                                     labels, subject_indices, site_ids}
     TwoTSTDataset            → finetune (dict con ts, pcc, label)
     PretrainTSDataset        → pretrain TST1 (solo ts)
     PretrainFCDataset        → pretrain TST2 (solo pcc)
@@ -38,18 +39,33 @@ from data.preprocessing.splitters import (
 )
 
 
-def _compute_pcc_upper(ts: np.ndarray) -> np.ndarray | None:
-    """ts: (R, T) → triángulo superior de la matriz de correlación (D,).
+def _compute_pcc_matrix(ts: np.ndarray) -> np.ndarray | None:
+    """ts: (R, T) → matriz PCC (R, R) float32.
+
     Devuelve None si alguna ROI es constante (varianza 0) — el paper
-    descarta estos sujetos en QC (Sec. 4.1.3)."""
+    descarta estos sujetos en QC (Sec. 4.1.3).
+    """
     ts_t = torch.from_numpy(ts).float()
     if (ts_t.std(dim=1) < 1e-8).any():
         return None
     corr = torch.corrcoef(ts_t)
     if torch.isnan(corr).any() or torch.isinf(corr).any():
         return None
-    triu = torch.triu_indices(corr.shape[0], corr.shape[1], offset=1)
-    return corr[triu[0], triu[1]].numpy().astype(np.float32)
+    return corr.numpy().astype(np.float32)
+
+
+def _pcc_upper_from_matrix(corr: np.ndarray) -> np.ndarray:
+    """Extrae el triángulo superior (sin diagonal) de una matriz PCC."""
+    triu = np.triu_indices(corr.shape[0], k=1)
+    return corr[triu].astype(np.float32)
+
+
+def _compute_pcc_upper(ts: np.ndarray) -> np.ndarray | None:
+    """ts: (R, T) → triángulo superior de la matriz de correlación (D,)."""
+    corr = _compute_pcc_matrix(ts)
+    if corr is None:
+        return None
+    return _pcc_upper_from_matrix(corr)
 
 
 def load_raw_data(config: dict, use_interp: bool = None) -> dict:
@@ -87,7 +103,8 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
 
     df = pd.read_csv(csv_path)
 
-    ts_list, pcc_list, labels, subj_ids, sites = [], [], [], [], []
+    ts_list, pcc_list, pcc_matrix_list = [], [], []
+    labels, subj_ids, sites = [], [], []
     missing = too_short = const_roi = 0
 
     for _, row in tqdm(df.iterrows(), total=len(df), desc=f"Cargando .1D de {root.name}"):
@@ -112,13 +129,15 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
         arr = arr[:max_seq_len]
 
         ts = arr.T.astype(np.float32)                    # (R, T)
-        pcc = _compute_pcc_upper(ts)
-        if pcc is None:
+        pcc_matrix = _compute_pcc_matrix(ts)
+        if pcc_matrix is None:
             const_roi += 1
             continue
+        pcc = _pcc_upper_from_matrix(pcc_matrix)
 
         ts_list.append(ts.T)                             # (T, R)
         pcc_list.append(pcc)
+        pcc_matrix_list.append(pcc_matrix)
         labels.append(int(row[label_col]))
         subj_ids.append(int(row["SUB_ID"]))
         sites.append(str(row["SITE_ID"]))
@@ -136,22 +155,33 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
     data = {
         "timeseries":      np.stack(ts_list).astype(np.float32),
         "pcc_vectors":     np.stack(pcc_list).astype(np.float32),
+        # Las matrices PCC completas se calculan una sola vez por sujeto y
+        # quedan cacheadas aquí para el grafo estático de la GNN.
+        "pcc_matrices":    np.stack(pcc_matrix_list).astype(np.float32),
         "labels":          np.array(labels, dtype=np.int64),
         "subject_indices": np.array(subj_ids, dtype=np.int64),
         "site_ids":        np.array(sites),
     }
     print(f"Cargados {len(labels)} sujetos  |  "
-          f"ts={data['timeseries'].shape}  pcc={data['pcc_vectors'].shape}")
+          f"ts={data['timeseries'].shape}  pcc={data['pcc_vectors'].shape}  "
+          f"pcc_matrices={data['pcc_matrices'].shape} (cacheadas)")
     _DATA_CACHE[cache_key] = data
     return data
 
 
 class TwoTSTDataset(Dataset):
     def __init__(self, timeseries, pcc_vectors, labels,
-                 normalize_ts=True, normalize_pcc=True):
+                 normalize_ts=True, normalize_pcc=True,
+                 pcc_matrices=None):
         self.timeseries = timeseries.astype(np.float32)
         self.pcc_vectors = pcc_vectors.astype(np.float32)
         self.labels = labels.astype(np.int64)
+        # Matrices PCC completas y sin normalizar: se usan para construir el
+        # grafo estático de la GNN una sola vez por sujeto.
+        self.pcc_matrices = (
+            None if pcc_matrices is None
+            else np.asarray(pcc_matrices, dtype=np.float32)
+        )
 
         if normalize_ts:
             mean = self.timeseries.mean(axis=(1, 2), keepdims=True)
@@ -167,11 +197,14 @@ class TwoTSTDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        return {
+        item = {
             "timeseries": torch.from_numpy(self.timeseries[idx]),
             "pcc_vector": torch.from_numpy(self.pcc_vectors[idx]),
             "label":      torch.tensor(self.labels[idx], dtype=torch.long),
         }
+        if self.pcc_matrices is not None:
+            item["pcc_matrix"] = torch.from_numpy(self.pcc_matrices[idx])
+        return item
 
 
 class PretrainTSDataset(Dataset):
@@ -245,6 +278,7 @@ def get_finetune_loaders(
     val_ratio: float = 0.15,
     seed: int = 42,
     eval_protocol: str = "kfold",
+    include_pcc_matrix: bool = False,
 ):
     data = load_raw_data(config)
     labels = data["labels"]
@@ -271,10 +305,24 @@ def get_finetune_loaders(
    
 
     ts, pcc = data["timeseries"], data["pcc_vectors"]
+    pcc_matrices = data.get("pcc_matrices")
+    if include_pcc_matrix and pcc_matrices is None:
+        raise ValueError(
+            "Se solicitó include_pcc_matrix=True, pero load_raw_data no "
+            "devolvió pcc_matrices."
+        )
 
-    train_ds = TwoTSTDataset(ts[train_idx], pcc[train_idx], labels[train_idx])
-    val_ds   = TwoTSTDataset(ts[val_idx],   pcc[val_idx],   labels[val_idx])
-    test_ds  = TwoTSTDataset(ts[test_idx],  pcc[test_idx],  labels[test_idx])
+    def _dataset(indices):
+        return TwoTSTDataset(
+            ts[indices], pcc[indices], labels[indices],
+            pcc_matrices=(
+                pcc_matrices[indices] if include_pcc_matrix else None
+            ),
+        )
+
+    train_ds = _dataset(train_idx)
+    val_ds = _dataset(val_idx)
+    test_ds = _dataset(test_idx)
 
     pin = torch.cuda.is_available()
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, generator=_shuffle_generator(seed),
@@ -386,6 +434,7 @@ if __name__ == "__main__":
         "PREFIX": "interp_",
         "N_ROIS": R,
         "LABEL_COL": "DX_GROUP",
+        "MAX_SEQ_LEN": T,
     }
 
     # ─── TEST 1: load_raw_data ────────────────────────────────────────
@@ -393,15 +442,19 @@ if __name__ == "__main__":
     data = load_raw_data(config, use_interp=True)
     assert data["timeseries"].shape == (N, T, R)
     assert data["pcc_vectors"].shape == (N, D)
+    assert data["pcc_matrices"].shape == (N, R, R)
     assert data["labels"].shape == (N,)
     assert len(np.unique(data["site_ids"])) == 3
-    print(f"  ✓ ts={data['timeseries'].shape}  pcc={data['pcc_vectors'].shape}\n")
+    print(f"  ✓ ts={data['timeseries'].shape}  pcc={data['pcc_vectors'].shape}  "
+          f"pcc_matrices={data['pcc_matrices'].shape}\n")
 
     # ─── TEST 2: PCC correcto ─────────────────────────────────────────
     print("── TEST 2: PCC coincide con cálculo directo ────────────────")
     sample_ts = data["timeseries"][0].T                       # (R, T)
     expected_pcc = _compute_pcc_upper(sample_ts)
     assert np.allclose(data["pcc_vectors"][0], expected_pcc, atol=1e-5)
+    expected_matrix = np.corrcoef(sample_ts)
+    assert np.allclose(data["pcc_matrices"][0], expected_matrix, atol=1e-5)
     print(f"  ✓ primer PCC coincide\n")
 
     # ─── TEST 3: pretrain loaders ─────────────────────────────────────
@@ -423,7 +476,16 @@ if __name__ == "__main__":
     assert batch["timeseries"].shape == (4, T, R)
     assert batch["pcc_vector"].shape == (4, D)
     assert batch["label"].shape == (4,)
+    assert "pcc_matrix" not in batch
+    tr_cache, _, _, _ = get_finetune_loaders(
+        config, batch_size=4, num_workers=0, fold_idx=0,
+        eval_protocol="kfold", n_folds=3, seed=0,
+        include_pcc_matrix=True,
+    )
+    batch_cache = next(iter(tr_cache))
+    assert batch_cache["pcc_matrix"].shape == (4, R, R)
     print(f"  ✓ keys={list(batch.keys())}  "
+          f"cached={tuple(batch_cache['pcc_matrix'].shape)}  "
           f"train={len(si['train_idx'])} val={len(si['val_idx'])} test={len(si['test_idx'])}\n")
 
     # ─── TEST 5: finetune loso ────────────────────────────────────────

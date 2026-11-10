@@ -22,18 +22,21 @@ class GNNClassificationTask:
         model: nn.Module,
         ts_batch: torch.Tensor,
         targets: torch.Tensor,
+        pcc_matrix: torch.Tensor | None = None,
         return_logits: bool = False,
     ):
         """
         Args:
-            model:     TemporalGNN.
-            ts_batch:  (B, T, R) series BOLD.
-            targets:   (B,) etiquetas 0/1.
+            model:      TemporalGNN.
+            ts_batch:   (B, T, R) series BOLD.
+            targets:    (B,) etiquetas 0/1.
+            pcc_matrix: (B, R, R) PCC cacheada por sujeto (modo static_fc).
+            return_logits: devuelve (logits, loss) si es True.
 
         Returns:
             loss, o (logits, loss) si `return_logits=True`.
         """
-        logits = model(ts_batch)
+        logits = model(ts_batch, pcc_matrix=pcc_matrix)
         loss = self.criterion(logits, targets)
         if return_logits:
             return logits, loss

@@ -19,7 +19,8 @@ from models.gnn_temporal import TemporalGNN
 GNN_DEFAULTS: dict[str, Any] = {
     "T": 116,
     "D_MODEL": 16,
-    "KNN": 5,
+    "GRAPH_MODE": "static_fc",
+    "KNN": 10,
     "NUM_LAYERS": 2,
     "DROPOUT": 0.3,
     "STRIDE": 1,
@@ -42,6 +43,12 @@ def resolve_gnn_config(cfg: dict, overrides: dict | None = None) -> dict:
         if value is not None:
             gnn[key] = value
 
+    gnn["GRAPH_MODE"] = str(gnn.get("GRAPH_MODE", "static_fc"))
+    if gnn["GRAPH_MODE"] not in {"static_fc", "dynamic"}:
+        raise ValueError(
+            "GNN.GRAPH_MODE debe ser 'static_fc' o 'dynamic', "
+            f"recibido {gnn['GRAPH_MODE']!r}"
+        )
     if int(gnn["D_MODEL"]) < 1:
         raise ValueError("GNN.D_MODEL debe ser >= 1")
     if int(gnn["KNN"]) < 1:
@@ -67,6 +74,7 @@ def build_gnn_model(cfg: dict) -> TemporalGNN:
         dropout=float(g["DROPOUT"]),
         stride=int(g.get("STRIDE", 1)),
         time_chunk=int(g.get("TIME_CHUNK", 16)),
+        graph_mode=str(g.get("GRAPH_MODE", "static_fc")),
         clf_hidden=tuple(int(x) for x in g.get("CLF_HIDDEN", (32, 16))),
         clf_dropout=float(g.get("CLF_DROPOUT", 0.5)),
     ).to(cfg["DEVICE"])
@@ -97,4 +105,5 @@ def build_gnn_loaders(cfg: dict, fold_idx: int):
         n_folds=int(cfg.get("N_FOLDS", 5)),
         seed=int(cfg["SEED"]),
         eval_protocol="loso",
+        include_pcc_matrix=(str(g.get("GRAPH_MODE", "static_fc")) == "static_fc"),
     )
