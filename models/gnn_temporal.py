@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 
 class GraphMessageLayer(nn.Module):
@@ -132,6 +133,7 @@ class GraphTemporalEncoder(nn.Module):
         edge_dim: int = 1,
         time_chunk: int = 16,
         graph_mode: str = "static_fc",
+        grad_checkpoint: bool = False,
     ):
         super().__init__()
         self.n_rois = int(n_rois)
@@ -141,6 +143,7 @@ class GraphTemporalEncoder(nn.Module):
         self.edge_dim = int(edge_dim)
         self.time_chunk = max(1, int(time_chunk))
         self.graph_mode = str(graph_mode)
+        self.grad_checkpoint = bool(grad_checkpoint)
         if self.graph_mode not in {"static_fc", "dynamic"}:
             raise ValueError(
                 "graph_mode debe ser 'static_fc' o 'dynamic', "
@@ -211,6 +214,32 @@ class GraphTemporalEncoder(nn.Module):
         zv = z_t.gather(1, v_idx)
         return (zu * zv).unsqueeze(-1)
 
+    def _run_chunk(self, z_f, h0_f, u_idx, v_idx):
+        """Procesa un bloque de timesteps independientes.
+
+        Se separa de `forward` para poder aplicar gradient checkpointing: en
+        entrenamiento se guardan solo las entradas del bloque y las activaciones
+        intermedias se recalculan durante el backward.
+        """
+        n, r = z_f.shape
+        e = self._edge_values(z_f, u_idx, v_idx)                 # (n,E,1)
+
+        off = (torch.arange(n, device=z_f.device) * r).view(n, 1)
+        lin_u = (off + u_idx).reshape(-1)
+        lin_v = (off + v_idx).reshape(-1)
+        deg = torch.zeros(n * r, 1, device=z_f.device, dtype=z_f.dtype)
+        deg.index_add_(
+            0, lin_u,
+            torch.ones(lin_u.numel(), 1, device=z_f.device, dtype=z_f.dtype),
+        )
+        deg.clamp_min_(1.0)
+
+        h = h0_f
+        ef = e.reshape(n * e.size(1), self.edge_dim)
+        for layer in self.layers:
+            h = layer(h, ef, lin_u, lin_v, deg)
+        return h
+
     def forward(
         self,
         z: torch.Tensor,
@@ -273,22 +302,26 @@ class GraphTemporalEncoder(nn.Module):
             else:
                 u_idx, v_idx = self._build_graph(z_f)            # (B·C,E)
 
-            e = self._edge_values(z_f, u_idx, v_idx)             # (B·C,E,1)
-
-            off = (torch.arange(n, device=z.device) * r).view(n, 1)
-            lin_u = (off + u_idx).reshape(-1)
-            lin_v = (off + v_idx).reshape(-1)
-            deg = torch.zeros(n * r, 1, device=z.device, dtype=z.dtype)
-            deg.index_add_(
-                0, lin_u,
-                torch.ones(lin_u.numel(), 1, device=z.device, dtype=z.dtype),
+            h0_f = h0[:, start:stop].reshape(n * r, self.d_model)
+            use_ckpt = (
+                self.grad_checkpoint
+                and self.training
+                and torch.is_grad_enabled()
             )
-            deg.clamp_min_(1.0)
-
-            h = h0[:, start:stop].reshape(n * r, self.d_model)
-            ef = e.reshape(n * e.size(1), self.edge_dim)
-            for layer in self.layers:
-                h = layer(h, ef, lin_u, lin_v, deg)
+            if use_ckpt:
+                # No se guardan las activaciones del bloque: se recalculan en
+                # el backward. El resultado es idéntico, pero baja el pico de
+                # VRAM cuando hay muchas aristas (p. ej. static_fc, k=10).
+                h = checkpoint(
+                    self._run_chunk,
+                    z_f,
+                    h0_f,
+                    u_idx,
+                    v_idx,
+                    use_reentrant=False,
+                )
+            else:
+                h = self._run_chunk(z_f, h0_f, u_idx, v_idx)
             chunks.append(h.view(b, chunk, r, self.d_model))
 
         # (B,Te,R,d): todos los timesteps quedan disponibles para la atención.
@@ -366,6 +399,7 @@ class TemporalGNN(nn.Module):
         clf_hidden: tuple[int, ...] = (32, 16),
         clf_dropout: float = 0.5,
         num_classes: int = 2,
+        grad_checkpoint: bool = False,
     ):
         super().__init__()
         self.n_rois = int(n_rois)
@@ -374,6 +408,7 @@ class TemporalGNN(nn.Module):
         self.stride = max(1, int(stride))
         self.time_chunk = max(1, int(time_chunk))
         self.graph_mode = str(graph_mode)
+        self.grad_checkpoint = bool(grad_checkpoint)
 
         self.encoder = GraphTemporalEncoder(
             n_rois=n_rois,
@@ -384,6 +419,7 @@ class TemporalGNN(nn.Module):
             stride=stride,
             time_chunk=time_chunk,
             graph_mode=graph_mode,
+            grad_checkpoint=grad_checkpoint,
         )
         self.classifier = NodeAttentionClassifier(
             d_model=d_model,

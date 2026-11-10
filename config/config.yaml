@@ -119,6 +119,8 @@ GNN:
   DROPOUT: 0.3
   STRIDE: 1
   TIME_CHUNK: 16
+  # Checkpointing por bloque: menos VRAM retenida por autograd en static_fc/k=10.
+  GRAD_CHECKPOINT: true
   CLF_HIDDEN: [32, 16]
   CLF_DROPOUT: 0.5
   N_EPOCHS: 500

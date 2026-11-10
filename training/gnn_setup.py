@@ -25,6 +25,7 @@ GNN_DEFAULTS: dict[str, Any] = {
     "DROPOUT": 0.3,
     "STRIDE": 1,
     "TIME_CHUNK": 16,
+    "GRAD_CHECKPOINT": False,
     "CLF_HIDDEN": [32, 16],
     "CLF_DROPOUT": 0.5,
     "N_EPOCHS": 500,
@@ -55,6 +56,7 @@ def resolve_gnn_config(cfg: dict, overrides: dict | None = None) -> dict:
         raise ValueError("GNN.KNN debe ser >= 1")
     if int(gnn["TIME_CHUNK"]) < 1:
         raise ValueError("GNN.TIME_CHUNK debe ser >= 1")
+    gnn["GRAD_CHECKPOINT"] = bool(gnn.get("GRAD_CHECKPOINT", False))
 
     cfg["GNN"] = gnn
     cfg["EVAL_PROTOCOL"] = "loso"
@@ -75,6 +77,7 @@ def build_gnn_model(cfg: dict) -> TemporalGNN:
         stride=int(g.get("STRIDE", 1)),
         time_chunk=int(g.get("TIME_CHUNK", 16)),
         graph_mode=str(g.get("GRAPH_MODE", "static_fc")),
+        grad_checkpoint=bool(g.get("GRAD_CHECKPOINT", False)),
         clf_hidden=tuple(int(x) for x in g.get("CLF_HIDDEN", (32, 16))),
         clf_dropout=float(g.get("CLF_DROPOUT", 0.5)),
     ).to(cfg["DEVICE"])

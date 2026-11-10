@@ -59,6 +59,12 @@ def parse_args():
     p.add_argument("--dropout", type=float, default=None)
     p.add_argument("--stride", type=int, default=None)
     p.add_argument("--time-chunk", type=int, default=None)
+    p.add_argument(
+        "--grad-checkpoint",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Gradient checkpointing por bloque temporal (menos VRAM, más cómputo)",
+    )
     p.add_argument("--clf-hidden", type=int, nargs="+", default=None)
     p.add_argument("--clf-dropout", type=float, default=None)
     return p.parse_args()
@@ -84,6 +90,7 @@ def main():
         "DROPOUT": args.dropout,
         "STRIDE": args.stride,
         "TIME_CHUNK": args.time_chunk,
+        "GRAD_CHECKPOINT": args.grad_checkpoint,
         "CLF_HIDDEN": args.clf_hidden,
         "CLF_DROPOUT": args.clf_dropout,
     }
@@ -114,7 +121,8 @@ def main():
           f"graph={g['GRAPH_MODE']} | d={g['D_MODEL']} | k={g['KNN']} | "
           f"layers={g['NUM_LAYERS']} | "
           f"dropout={g['DROPOUT']} | stride={g['STRIDE']} | "
-          f"chunk={g['TIME_CHUNK']} | batch={g['BATCH_SIZE']} | "
+          f"chunk={g['TIME_CHUNK']} | ckpt={g['GRAD_CHECKPOINT']} | "
+          f"batch={g['BATCH_SIZE']} | "
           f"epochs={g['N_EPOCHS']}")
     if g["GRAPH_MODE"] == "static_fc":
         print(f"PCC matrices cacheadas: {data['pcc_matrices'].shape} "
