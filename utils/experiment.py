@@ -19,18 +19,20 @@ from pathlib import Path
 # |       └── summary.txt
 
 
-def create_experiment_dir(config: dict) -> dict:
+def create_experiment_dir(config: dict, root: str = "experiments",
+                          config_path: str = "config/config.yaml") -> dict:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_name  = config.get("RUN_NAME", "exp")
     exp_id    = f"{timestamp}_{run_name}"
 
-    exp_dir = Path("experiments") / exp_id
+    exp_dir = Path(root) / exp_id
     (exp_dir / "logs").mkdir(parents=True, exist_ok=True)
     (exp_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
 
     # Guardar copia del config usado
-    shutil.copy("config/config.yaml", exp_dir / "config.yaml")
+    shutil.copy(config_path, exp_dir / "config.yaml")
 
+    config["EXP_DIR"]           = str(exp_dir)
     config["LOGS_PATH"]         = str(exp_dir / "logs")
     config["CHECKPOINTS_PATH"]  = str(exp_dir / "checkpoints")
     config["RESULTS_PATH"]      = str(exp_dir / "results.csv")
