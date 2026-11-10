@@ -21,7 +21,12 @@ import yaml
 
 from data.loaders.dataloader import load_raw_data
 from training.gnn_setup import resolve_gnn_config
-from training.train_gnn import run_loso, save_summary, summarize
+from training.train_gnn import (
+    run_loso,
+    save_seed_artifacts,
+    save_summary,
+    summarize,
+)
 from utils.experiment import create_experiment_dir
 from utils.seed import set_seed
 
@@ -108,6 +113,7 @@ def main():
     print("=" * 78)
 
     metrics = run_loso(cfg, folds, ckpt_dir)
+    artifacts = save_seed_artifacts(metrics, cfg, exp_dir, ckpt_dir)
     summary = summarize(metrics, cfg, folds)
     results_path = save_summary(summary, exp_dir)
 
@@ -120,6 +126,9 @@ def main():
             print(f"  {name:<12s}: {s['mean']:.4f} +/- {s['std']:.4f}  "
                   f"[{s['ci95_lower']:.4f}, {s['ci95_upper']:.4f}]")
     print(f"\nResultados: {results_path}")
+    print(f"AUC por sitio: {artifacts['site_auc_csv']}")
+    print(f"Predicciones por sujeto: {artifacts['preds']}")
+    print(f"Curvas de pérdida: {artifacts['curves']}")
 
 
 if __name__ == "__main__":
