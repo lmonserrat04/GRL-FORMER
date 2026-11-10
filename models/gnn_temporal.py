@@ -1,49 +1,48 @@
 """
 GNN temporal para clasificación ASD/TD desde series BOLD (ABIDE I, CC200).
 
-Sin LSTM ni GRU. La dinámica temporal se resuelve con dos piezas:
-    (1) aristas dinámicas: e_uv(t) = z_u(t) * z_v(t), resumidas en una
-        ventana deslizante por su MEDIA y su DESVIACIÓN TÍPICA;
-    (2) atención temporal sobre los instantes (no recurrencia).
+Sin LSTM, sin GRU y sin transformer. La dinámica temporal se resuelve
+procesando el grafo timestep a timestep con pesos compartidos:
 
-Pipeline por sujeto (x ∈ R^{T×R}, R=200):
-    1. z-score por ROI sobre el tiempo  →  z (B, T, R)
-    2. Grafo disperso k-NN por sujeto:
-           score_uv = |mean_t z_u(t) z_v(t)|   (= |correlación|)
-           top-k por nodo + aristas inversas   →  E = 2·R·k
-    3. Arista dinámica:
-           e_uv(t)   = z_u(t) · z_v(t)
-           mu_uv(t)  = media de e_uv en ventana W centrada en t
-           sig_uv(t) = desv. típica de e_uv en esa ventana
-    4. GNN por paso temporal (pesos compartidos, sin recurrencia):
-           h_u      = W_in · z_u(t)
-           m_u      = Σ_{v∈N(u)} φ([h_v ‖ mu_uv ‖ sig_uv]) / deg_u
-           h_u      ← LayerNorm(h_u + Dropout(m_u))
-           h_u      ← LayerNorm(h_u + Dropout(ψ([h_u ‖ m_u])))
-           (NUM_LAYERS veces)
-    5. Readout por instante:  g_t = [mean_u h_u ‖ max_u h_u] ∈ R^{2d}
-    6. Atención temporal:     alpha_t = softmax_t(wᵀ tanh(W g_t))
-                              context = Σ_t alpha_t g_t
-    7. Clasificador:          LayerNorm → Linear → GELU → Dropout → Linear(2)
+    1. z-score por ROI sobre el tiempo  ->  z (B, T, R)
+    2. Para cada timestep t, grafo disperso k-NN dinámico:
+           e_uv(t)  = z_u(t) · z_v(t)
+           score_uv = |e_uv(t)|
+           top-k por nodo + aristas inversas   ->  E = 2·R·k
+    3. Cada arista lleva directamente e_uv(t). No hay ventana, media,
+       desviación ni correlación temporal: ventana = 1.
+    4. Para cada timestep t, una GNN de pesos compartidos actualiza:
+           h_u(t) = W_in · z_u(t)
+           m_u(t) = Σ_{v∈N_t(u)} phi([h_v(t) || e_uv(t)]) / deg_u
+           h_u(t) ← LayerNorm(h_u(t) + Dropout(m_u(t)))
+           h_u(t) ← LayerNorm(h_u(t) + Dropout(psi([h_u(t) || m_u(t)])))
+    5. Selección temporal por nodo:
+           H_u = max_t h_u(t)          ->  (B, R, d)
+    6. Atención sobre nodos (ROIs):
+           alpha_u = softmax_u(w^T tanh(W H_u))
+           h_G = Σ_u alpha_u · H_u     ->  (B, d)
+    7. Clasificador de sujeto:
+           LayerNorm(d) → Linear(d, 32) → GELU → Dropout(0.5)
+                        → Linear(32, 16) → GELU → Dropout(0.5)
+                        → Linear(16, 2)
 
-El grafo se construye por sujeto (topología distinta por muestra) pero los
-pesos de la GNN se comparten entre todos los instantes y sujetos.
+El grafo se construye por sujeto y por timestep, pero los pesos de la GNN y
+del clasificador se comparten entre sujetos y timesteps.
 """
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class GraphMessageLayer(nn.Module):
     """Una capa de paso de mensajes sobre un grafo disperso ya construido."""
 
-    def __init__(self, d_model: int, dropout: float):
+    def __init__(self, d_model: int, edge_dim: int, dropout: float):
         super().__init__()
         self.phi = nn.Sequential(
-            nn.Linear(d_model + 2, d_model),
+            nn.Linear(d_model + edge_dim, d_model),
             nn.GELU(),
             nn.Linear(d_model, d_model),
         )
@@ -58,8 +57,8 @@ class GraphMessageLayer(nn.Module):
 
     def forward(self, h, edge_feats, lin_u, lin_v, deg):
         """
-        h:           (N, d)  con N = B·T_chunk·R
-        edge_feats:  (M, 2)  con M = B·T_chunk·E
+        h:           (N, d)  con N = B·R
+        edge_feats:  (M, edge_dim)  con M = B·E
         lin_u/lin_v: (M,)    índices planos receptor / emisor
         deg:         (N, 1)  grado de entrada por nodo
         """
@@ -74,165 +73,206 @@ class GraphMessageLayer(nn.Module):
         return h
 
 
-class TemporalGNN(nn.Module):
-    """Clasificador ASD/TD: grafo disperso dinámico + GNN + atención temporal."""
+class GraphTemporalEncoder(nn.Module):
+    """Convierte una serie BOLD (B,T,R) en un vector por ROI (B,R,d).
+
+    En cada timestep construye un grafo k-NN con los productos instantáneos
+    |z_u(t)·z_v(t)|, aplica la misma GNN y al final se queda con el máximo
+    temporal de cada nodo/ROI. No hay atención temporal ni recurrencia.
+    """
 
     def __init__(
         self,
         n_rois: int = 200,
-        d_model: int = 32,
-        knn: int = 8,
-        window: int = 9,
+        d_model: int = 16,
+        knn: int = 5,
         num_layers: int = 2,
         dropout: float = 0.3,
-        stride: int = 2,
-        time_chunk: int = 8,
+        stride: int = 1,
+        edge_dim: int = 1,
+    ):
+        super().__init__()
+        self.n_rois = int(n_rois)
+        self.d_model = int(d_model)
+        self.knn = int(knn)
+        self.stride = max(1, int(stride))
+        self.edge_dim = int(edge_dim)
+
+        self.node_in = nn.Linear(1, d_model)
+        self.node_norm = nn.LayerNorm(d_model)
+        self.layers = nn.ModuleList(
+            [
+                GraphMessageLayer(d_model, self.edge_dim, dropout)
+                for _ in range(int(num_layers))
+            ]
+        )
+
+    @torch.no_grad()
+    def _build_graph(self, z_t: torch.Tensor):
+        """z_t: (B,R) → (u_idx, v_idx) (B,E) para este timestep."""
+        b, r = z_t.shape
+        score = torch.einsum("br,bs->brs", z_t, z_t).abs()
+        score = torch.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0)
+        score.diagonal(dim1=-2, dim2=-1).zero_()
+
+        k = max(1, min(self.knn, r - 1))
+        nbr = score.topk(k, dim=-1).indices                      # (B,R,k)
+        node = torch.arange(r, device=z_t.device).view(1, r, 1).expand(b, r, k)
+
+        u_idx = torch.cat([node, nbr], dim=-1).reshape(b, -1)    # receptor
+        v_idx = torch.cat([nbr, node], dim=-1).reshape(b, -1)    # emisor
+        return u_idx, v_idx
+
+    @staticmethod
+    def _edge_values(z_t, u_idx, v_idx):
+        """e_uv(t) = z_u(t)·z_v(t), sin media ni ventana: (B,E,1)."""
+        zu = z_t.gather(1, u_idx)                                # (B,E)
+        zv = z_t.gather(1, v_idx)
+        return (zu * zv).unsqueeze(-1)
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        """z: (B,T,R) estandarizado → H: (B,R,d) con máximo temporal."""
+        b, t, r = z.shape
+        if t < 1:
+            raise ValueError("La serie debe tener al menos un timestep")
+        if r != self.n_rois:
+            raise ValueError(f"n_rois={self.n_rois}, pero la entrada tiene R={r}")
+
+        times = torch.arange(0, t, self.stride, device=z.device)
+        te = times.numel()
+
+        # Embedding inicial de cada ROI en cada timestep.
+        h0 = self.node_norm(self.node_in(z.unsqueeze(-1)))       # (B,T,R,d)
+        h0 = h0.index_select(1, times)                           # (B,Te,R,d)
+
+        off = (torch.arange(b, device=z.device) * r).view(b, 1)
+        best: torch.Tensor | None = None
+
+        # Timestep a timestep: grafo dinámico + GNN de pesos compartidos.
+        for idx, step in enumerate(times.tolist()):
+            z_t = z[:, step]                                     # (B,R)
+            u_idx, v_idx = self._build_graph(z_t)                # (B,E)
+            e = self._edge_values(z_t, u_idx, v_idx)             # (B,E,1)
+
+            lin_u = (off + u_idx).reshape(-1)
+            lin_v = (off + v_idx).reshape(-1)
+            deg = torch.zeros(b * r, 1, device=z.device, dtype=z.dtype)
+            deg.index_add_(
+                0, lin_u,
+                torch.ones(lin_u.numel(), 1, device=z.device, dtype=z.dtype),
+            )
+            deg.clamp_min_(1.0)
+
+            h = h0[:, idx].reshape(b * r, self.d_model)
+            ef = e.reshape(b * e.size(1), self.edge_dim)
+            for layer in self.layers:
+                h = layer(h, ef, lin_u, lin_v, deg)
+            h = h.view(b, r, self.d_model)
+
+            best = h if best is None else torch.maximum(best, h)
+
+        return best
+
+
+class NodeAttentionClassifier(nn.Module):
+    """Clasificador de sujeto con atención aprendida sobre las 200 ROIs.
+
+    Cada ROI u recibe un peso alpha_u (softmax sobre las 200 ROIs) y el
+    vector del sujeto es h_G = sum_u alpha_u * H_u.
+    """
+
+    def __init__(
+        self,
+        d_model: int = 16,
+        hidden_dims: tuple[int, ...] = (32, 16),
+        dropout: float = 0.5,
+        num_classes: int = 2,
+    ):
+        super().__init__()
+        self.att = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.Tanh(),
+            nn.Linear(d_model, 1),
+        )
+
+        layers: list[nn.Module] = [nn.LayerNorm(d_model)]
+        prev = d_model
+        for hidden in hidden_dims:
+            layers.extend(
+                [
+                    nn.Linear(prev, int(hidden)),
+                    nn.GELU(),
+                    nn.Dropout(dropout),
+                ]
+            )
+            prev = int(hidden)
+        layers.append(nn.Linear(prev, num_classes))
+        self.classifier = nn.Sequential(*layers)
+
+    def forward(self, nodes: torch.Tensor, return_attn: bool = False):
+        """
+        nodes: (B, R, d)
+        returns: logits (B, num_classes), y opcionalmente alpha (B, R).
+        """
+        scores = self.att(nodes).squeeze(-1)                     # (B,R)
+        alpha = torch.softmax(scores, dim=1)                     # suma 1 por sujeto
+        subject = (alpha.unsqueeze(-1) * nodes).sum(dim=1)       # (B,d)
+        logits = self.classifier(subject)
+
+        if return_attn:
+            return logits, alpha
+        return logits
+
+
+class TemporalGNN(nn.Module):
+    """Encoder de grafo temporal + clasificador con atención sobre ROIs."""
+
+    def __init__(
+        self,
+        n_rois: int = 200,
+        d_model: int = 16,
+        knn: int = 5,
+        num_layers: int = 2,
+        dropout: float = 0.3,
+        stride: int = 1,
+        clf_hidden: tuple[int, ...] = (32, 16),
+        clf_dropout: float = 0.5,
         num_classes: int = 2,
     ):
         super().__init__()
         self.n_rois = int(n_rois)
         self.d_model = int(d_model)
         self.knn = int(knn)
-        self.window = int(window) if int(window) % 2 == 1 else int(window) + 1
-        self.stride = max(int(stride), 1)
-        self.time_chunk = max(int(time_chunk), 1)
+        self.stride = max(1, int(stride))
 
-        self.node_in = nn.Linear(1, d_model)
-        self.node_norm = nn.LayerNorm(d_model)
-        self.layers = nn.ModuleList(
-            [GraphMessageLayer(d_model, dropout) for _ in range(int(num_layers))]
+        self.encoder = GraphTemporalEncoder(
+            n_rois=n_rois,
+            d_model=d_model,
+            knn=knn,
+            num_layers=num_layers,
+            dropout=dropout,
+            stride=stride,
         )
-        self.readout_norm = nn.LayerNorm(2 * d_model)
-        self.att_proj = nn.Sequential(
-            nn.Linear(2 * d_model, d_model),
-            nn.Tanh(),
-            nn.Linear(d_model, 1),
-        )
-        self.classifier = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, num_classes),
+        self.classifier = NodeAttentionClassifier(
+            d_model=d_model,
+            hidden_dims=tuple(int(x) for x in clf_hidden),
+            dropout=clf_dropout,
+            num_classes=num_classes,
         )
 
-    # ──────────────────────────────────────────────────────────────────
-    # Construcción del grafo disperso
-    # ──────────────────────────────────────────────────────────────────
-    @torch.no_grad()
-    def _build_graph(self, z: torch.Tensor):
-        """z: (B, T, R) ya estandarizado por ROI → (u_idx, v_idx) (B, E)."""
-        b, t, r = z.shape
-        zc = z - z.mean(dim=1, keepdim=True)
-        sd = zc.std(dim=1, keepdim=True).clamp_min(1e-5)
-        zn = zc / sd
-        score = torch.einsum("btr,bts->brs", zn, zn).abs() / t
-        score = torch.nan_to_num(score, nan=0.0, posinf=0.0, neginf=0.0)
-        score.diagonal(dim1=-2, dim2=-1).zero_()
-
-        k = min(self.knn, r - 1)
-        nbr = score.topk(k, dim=-1).indices                      # (B, R, k)
-        node = torch.arange(r, device=z.device).view(1, r, 1).expand(b, r, k)
-
-        u_idx = torch.cat([node, nbr], dim=-1).reshape(b, -1)    # receptor
-        v_idx = torch.cat([nbr, node], dim=-1).reshape(b, -1)    # emisor
-        return u_idx, v_idx
-
-    # ──────────────────────────────────────────────────────────────────
-    # Aristas dinámicas: e_uv(t) + media/desv en ventana
-    # ──────────────────────────────────────────────────────────────────
-    def _edge_features(self, z, u_idx, v_idx):
-        """z: (B,T,R) → (B, T, E, 2) con [media, desv] en ventana."""
-        b, t, _ = z.shape
-
-        zu = z.gather(2, u_idx.unsqueeze(1).expand(-1, t, -1))   # (B,T,E)
-        zv = z.gather(2, v_idx.unsqueeze(1).expand(-1, t, -1))
-        e = (zu * zv).transpose(1, 2)                            # (B,E,T)
-
-        pad = self.window // 2
-        e_pad = F.pad(e, (pad, pad), mode="replicate")
-        mean = F.avg_pool1d(e_pad, self.window, stride=1)
-        sq = F.avg_pool1d(e_pad * e_pad, self.window, stride=1)
-        var = (sq - mean * mean).clamp_min(1e-6)
-        std = var.sqrt()                                         # (B,E,T)
-
-        feats = torch.stack([mean, std], dim=-1)                 # (B,E,T,2)
-        return feats.permute(0, 2, 1, 3).contiguous()            # (B,T,E,2)
-
-    # ──────────────────────────────────────────────────────────────────
-    # Forward
-    # ──────────────────────────────────────────────────────────────────
-    def forward(self, x: torch.Tensor, return_attn: bool = False):
-        """x: (B, T, R) crudo o normalizado por sujeto → logits (B, 2)."""
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """x: (B,T,R) crudo → H: (B,R,d) con máximo temporal por ROI."""
         if x.dim() != 3:
             raise ValueError(f"Se espera (B, T, R); recibido {tuple(x.shape)}")
-        b, t, r = x.shape
-        if r != self.n_rois:
-            raise ValueError(f"n_rois={self.n_rois}, pero la entrada tiene R={r}")
+        if x.size(2) != self.n_rois:
+            raise ValueError(f"n_rois={self.n_rois}, pero la entrada tiene R={x.size(2)}")
 
-        # 1) Estandarización por ROI (necesaria para que z_u·z_v sea comparable)
+        # Estandarización por ROI sobre el tiempo.
         z = x - x.mean(dim=1, keepdim=True)
-        z = z / z.std(dim=1, keepdim=True).clamp_min(1e-5)
+        z = z / z.std(dim=1, keepdim=True, unbiased=False).clamp_min(1e-5)
+        return self.encoder(z)
 
-        # 2) Grafo disperso k-NN por sujeto
-        u_idx, v_idx = self._build_graph(z)                      # (B,E)
-        e_count = u_idx.size(1)
-
-        # 3) Aristas dinámicas con media y desv en ventana
-        edge_feats_full = self._edge_features(z, u_idx, v_idx)   # (B,T,E,2)
-
-        # 4) Instantes a evaluar (stride) y embedding de nodo inicial
-        times = torch.arange(0, t, self.stride, device=x.device)
-        te = times.numel()
-
-        z_s = z.index_select(1, times)                           # (B,Te,R)
-        h0 = self.node_norm(self.node_in(z_s.unsqueeze(-1)))     # (B,Te,R,d)
-        edge_feats = edge_feats_full.index_select(1, times)      # (B,Te,E,2)
-
-        g_steps = []
-        for start in range(0, te, self.time_chunk):
-            stop = min(start + self.time_chunk, te)
-            tc = stop - start
-
-            h = h0[:, start:stop].reshape(b * tc, r, self.d_model)
-            ef = edge_feats[:, start:stop].reshape(b * tc, e_count, 2)
-
-            # El batch plano del chunk es (b, t_chunk), así que cada muestra
-            # aporta sus propias aristas en cada instante del chunk.
-            u_chunk = u_idx.unsqueeze(1).expand(-1, tc, -1).reshape(b * tc, e_count)
-            v_chunk = v_idx.unsqueeze(1).expand(-1, tc, -1).reshape(b * tc, e_count)
-            off = torch.arange(b * tc, device=x.device).view(-1, 1) * r
-            lin_u = (off + u_chunk).reshape(-1)
-            lin_v = (off + v_chunk).reshape(-1)
-
-            h_flat = h.reshape(-1, self.d_model)
-            deg = torch.zeros(
-                b * tc * r, 1, device=x.device, dtype=h_flat.dtype
-            ).index_add_(
-                0,
-                lin_u,
-                torch.ones(lin_u.numel(), 1, device=x.device, dtype=h_flat.dtype),
-            ).clamp_min(1.0)
-
-            for layer in self.layers:
-                h_flat = layer(h_flat, ef.reshape(-1, 2), lin_u, lin_v, deg)
-
-            h = h_flat.view(b * tc, r, self.d_model)
-
-            # 5) Readout por instante: media + máximo sobre nodos
-            g = torch.cat([h.mean(dim=1), h.max(dim=1).values], dim=-1)
-            g_steps.append(g.view(b, tc, -1))
-
-        g_all = torch.cat(g_steps, dim=1)                        # (B,Te,2d)
-        g_all = self.readout_norm(g_all)
-
-        # 6) Atención temporal sobre los instantes
-        logits_att = self.att_proj(g_all).squeeze(-1)            # (B,Te)
-        alpha = torch.softmax(logits_att, dim=1)
-        context = (alpha.unsqueeze(-1) * g_all).sum(dim=1)       # (B,2d)
-
-        # 7) Clasificador
-        out = self.classifier(context)
-        if return_attn:
-            return out, alpha
-        return out
+    def forward(self, x: torch.Tensor, return_attn: bool = False):
+        """x: (B,T,R) → logits (B,2); opcionalmente alpha (B,R)."""
+        nodes = self.encode(x)
+        return self.classifier(nodes, return_attn=return_attn)

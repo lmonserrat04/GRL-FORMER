@@ -18,18 +18,18 @@ from models.gnn_temporal import TemporalGNN
 
 GNN_DEFAULTS: dict[str, Any] = {
     "T": 116,
-    "D_MODEL": 32,
-    "KNN": 8,
-    "WINDOW": 9,
+    "D_MODEL": 16,
+    "KNN": 5,
     "NUM_LAYERS": 2,
     "DROPOUT": 0.3,
-    "STRIDE": 2,
-    "TIME_CHUNK": 8,
-    "N_EPOCHS": 50,
-    "BATCH_SIZE": 16,
+    "STRIDE": 1,
+    "CLF_HIDDEN": [32, 16],
+    "CLF_DROPOUT": 0.5,
+    "N_EPOCHS": 500,
+    "BATCH_SIZE": 32,
     "LR": 1e-3,
     "WEIGHT_DECAY": 1e-4,
-    "PATIENCE": 12,
+    "PATIENCE": 30,
 }
 
 
@@ -41,10 +41,10 @@ def resolve_gnn_config(cfg: dict, overrides: dict | None = None) -> dict:
         if value is not None:
             gnn[key] = value
 
-    if int(gnn["WINDOW"]) < 1:
-        raise ValueError("GNN.WINDOW debe ser >= 1")
-    if int(gnn["WINDOW"]) % 2 == 0:
-        gnn["WINDOW"] = int(gnn["WINDOW"]) + 1
+    if int(gnn["D_MODEL"]) < 1:
+        raise ValueError("GNN.D_MODEL debe ser >= 1")
+    if int(gnn["KNN"]) < 1:
+        raise ValueError("GNN.KNN debe ser >= 1")
 
     cfg["GNN"] = gnn
     cfg["EVAL_PROTOCOL"] = "loso"
@@ -60,11 +60,11 @@ def build_gnn_model(cfg: dict) -> TemporalGNN:
         n_rois=int(cfg["N_ROIS"]),
         d_model=int(g["D_MODEL"]),
         knn=int(g["KNN"]),
-        window=int(g["WINDOW"]),
         num_layers=int(g["NUM_LAYERS"]),
         dropout=float(g["DROPOUT"]),
-        stride=int(g["STRIDE"]),
-        time_chunk=int(g["TIME_CHUNK"]),
+        stride=int(g.get("STRIDE", 1)),
+        clf_hidden=tuple(int(x) for x in g.get("CLF_HIDDEN", (32, 16))),
+        clf_dropout=float(g.get("CLF_DROPOUT", 0.5)),
     ).to(cfg["DEVICE"])
 
 
