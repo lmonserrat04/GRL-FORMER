@@ -16,8 +16,10 @@ procesando el grafo timestep a timestep con pesos compartidos:
            m_u(t) = Σ_{v∈N_t(u)} phi([h_v(t) || e_uv(t)]) / deg_u
            h_u(t) ← LayerNorm(h_u(t) + Dropout(m_u(t)))
            h_u(t) ← LayerNorm(h_u(t) + Dropout(psi([h_u(t) || m_u(t)])))
-    5. Selección temporal por nodo:
-           H_u = max_t h_u(t)          ->  (B, R, d)
+    5. Atención temporal (un peso alpha_t por timestep y sujeto):
+           s_t     = w^T tanh(W · mean_u h_u(t))
+           alpha_t = softmax_t(s_t)
+           H_u     = Σ_t alpha_t · h_u(t)          ->  (B, R, d)
        Los timesteps se procesan en bloques independientes para aprovechar la
        GPU. Cada timestep conserva su propio grafo y no hay mensajes entre
        timesteps; el resultado es idéntico a recorrerlos uno a uno.
@@ -76,12 +78,44 @@ class GraphMessageLayer(nn.Module):
         return h
 
 
+class TemporalAttention(nn.Module):
+    """Atención sobre el eje temporal con un peso por timestep.
+
+    Para cada sujeto calcula un resumen medio de las ROIs en cada timestep,
+    proyecta ese resumen a un escalar y aplica softmax sobre los T timesteps.
+    El mismo vector alpha (B,T) pondera todos los nodos/ROIs del sujeto.
+    """
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.att = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.Tanh(),
+            nn.Linear(d_model, 1),
+        )
+
+    def forward(
+        self,
+        h: torch.Tensor,
+        return_weights: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """h: (B,T,R,d) -> H: (B,R,d), alpha: (B,T)."""
+        pooled = h.mean(dim=2)                                  # (B,T,d)
+        scores = self.att(pooled).squeeze(-1)                   # (B,T)
+        alpha = torch.softmax(scores, dim=1)                    # suma 1 en T
+        subject = torch.einsum("bt,btrd->brd", alpha, h)         # (B,R,d)
+        if return_weights:
+            return subject, alpha
+        return subject
+
+
 class GraphTemporalEncoder(nn.Module):
     """Convierte una serie BOLD (B,T,R) en un vector por ROI (B,R,d).
 
     En cada timestep construye un grafo k-NN con los productos instantáneos
-    |z_u(t)·z_v(t)|, aplica la misma GNN y al final se queda con el máximo
-    temporal de cada nodo/ROI. No hay atención temporal ni recurrencia.
+    |z_u(t)·z_v(t)|, aplica la misma GNN y combina los timesteps con atención
+    temporal: un peso alpha_t por instante, compartido entre las ROIs. No hay
+    recurrencia: no se pasa estado oculto de un timestep al siguiente.
     """
 
     def __init__(
@@ -111,6 +145,7 @@ class GraphTemporalEncoder(nn.Module):
                 for _ in range(int(num_layers))
             ]
         )
+        self.temporal_attn = TemporalAttention(d_model)
 
     @torch.no_grad()
     def _build_graph(self, z_t: torch.Tensor):
@@ -135,8 +170,12 @@ class GraphTemporalEncoder(nn.Module):
         zv = z_t.gather(1, v_idx)
         return (zu * zv).unsqueeze(-1)
 
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
-        """z: (B,T,R) estandarizado → H: (B,R,d) con máximo temporal."""
+    def forward(
+        self,
+        z: torch.Tensor,
+        return_temporal_attn: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """z: (B,T,R) estandarizado -> H: (B,R,d) con atención temporal."""
         b, t, r = z.shape
         if t < 1:
             raise ValueError("La serie debe tener al menos un timestep")
@@ -150,7 +189,7 @@ class GraphTemporalEncoder(nn.Module):
         h0 = self.node_norm(self.node_in(z.unsqueeze(-1)))       # (B,T,R,d)
         h0 = h0.index_select(1, times)                           # (B,Te,R,d)
 
-        best: torch.Tensor | None = None
+        chunks: list[torch.Tensor] = []
 
         # Bloques de timesteps independientes: no hay mensajes entre tiempos.
         # Cada timestep conserva su propio grafo dinámico y sus pesos compartidos.
@@ -178,11 +217,15 @@ class GraphTemporalEncoder(nn.Module):
             ef = e.reshape(n * e.size(1), self.edge_dim)
             for layer in self.layers:
                 h = layer(h, ef, lin_u, lin_v, deg)
-            h = h.view(b, chunk, r, self.d_model).amax(dim=1)    # (B,R,d)
+            chunks.append(h.view(b, chunk, r, self.d_model))
 
-            best = h if best is None else torch.maximum(best, h)
+        # (B,Te,R,d): todos los timesteps quedan disponibles para la atención.
+        h_all = torch.cat(chunks, dim=1)
+        h, alpha = self.temporal_attn(h_all, return_weights=True)
 
-        return best
+        if return_temporal_attn:
+            return h, alpha
+        return h
 
 
 class NodeAttentionClassifier(nn.Module):
@@ -274,8 +317,12 @@ class TemporalGNN(nn.Module):
             num_classes=num_classes,
         )
 
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (B,T,R) crudo → H: (B,R,d) con máximo temporal por ROI."""
+    def encode(
+        self,
+        x: torch.Tensor,
+        return_temporal_attn: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """x: (B,T,R) crudo -> H: (B,R,d) con atención temporal."""
         if x.dim() != 3:
             raise ValueError(f"Se espera (B, T, R); recibido {tuple(x.shape)}")
         if x.size(2) != self.n_rois:
@@ -284,7 +331,7 @@ class TemporalGNN(nn.Module):
         # Estandarización por ROI sobre el tiempo.
         z = x - x.mean(dim=1, keepdim=True)
         z = z / z.std(dim=1, keepdim=True, unbiased=False).clamp_min(1e-5)
-        return self.encoder(z)
+        return self.encoder(z, return_temporal_attn=return_temporal_attn)
 
     def forward(self, x: torch.Tensor, return_attn: bool = False):
         """x: (B,T,R) → logits (B,2); opcionalmente alpha (B,R)."""
