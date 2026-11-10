@@ -39,7 +39,7 @@ def parse_args():
     p.add_argument("--out-root", default="experiments_gnn")
     p.add_argument("--folds", type=int, nargs="+", default=None,
                    help="Folds a correr (default: todos los sitios LOSO)")
-    p.add_argument("--num-workers", type=int, default=2)
+    p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--device", default=None)
     p.add_argument("--n-epochs", type=int, default=None)
     p.add_argument("--patience", type=int, default=None)
