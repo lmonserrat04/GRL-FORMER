@@ -57,6 +57,13 @@ MLP_HEAD:
   - 2
   DROPOUT : 0
 
+# Clasificador auxiliar sobre h_ts (vector temporal justo antes de la fusión).
+# Pérdida global: CE(fused) + LAMBDA * CE(h_ts).
+AUX_TS_HEAD:
+  ENABLED: true
+  HIDDEN_DIM: 128
+  LAMBDA: 0.5
+
 PT_TST1:
   N_EPOCHS: 500
   BATCH_SIZE: 32

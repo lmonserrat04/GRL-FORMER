@@ -23,7 +23,8 @@ class DualStreamModel(nn.Module):
     - TST1: Transformer temporal, procesa series temporales de fMRI
     - TST2: Transformer de conectividad, procesa vectores PCC
     - Módulo de fusión: Fusiona las características de ambos Transformers
-    - Cabezal de clasificación: Clasificador MLP
+    - Cabezal de clasificación: Clasificador MLP sobre el vector fusionado
+    - Cabezal auxiliar opcional: Clasificador MLP sobre h_ts antes de fusionar
     """
 
     def __init__(
@@ -37,12 +38,16 @@ class DualStreamModel(nn.Module):
         mlp_dims=None,
         proj_head_1=None,
         proj_head_2=None,
+        aux_hidden_dim=128,
+        aux_enabled=False,
     ):
         """
         Args:
             proj_head_1: Projection head entrenada en contrastive (TST1).
                          Si se pasa, la fusión opera sobre z (128), no sobre h_ts.
             proj_head_2: Idem para TST2.
+            aux_hidden_dim: Dimensión oculta del MLP auxiliar sobre h_ts.
+            aux_enabled: Si crea el clasificador auxiliar de la rama temporal.
         """
         super().__init__()
 
@@ -75,7 +80,26 @@ class DualStreamModel(nn.Module):
         
         self.classifier = create_mlp_head([fusion_dim] + list(mlp_dims) , dropout, act_name= 'gelu')
 
-    def forward(self, timeseries, pcc_vector, return_features=False, return_attention=False):
+        # Clasificador auxiliar sobre la representación temporal justo antes
+        # de la fusión: dim_ts_fusion -> aux_hidden_dim -> num_classes.
+        self.aux_enabled = bool(aux_enabled)
+        if self.aux_enabled:
+            self.ts_classifier = create_mlp_head(
+                [dim_ts_fusion, int(aux_hidden_dim), num_classes],
+                dropout,
+                act_name='gelu',
+            )
+        else:
+            self.ts_classifier = None
+
+    def forward(
+        self,
+        timeseries,
+        pcc_vector,
+        return_features=False,
+        return_attention=False,
+        return_aux_logits=False,
+    ):
         h_ts = self.transformer_ts(timeseries, mode='finetune') #Forward pass en tst 1
         h_fc = self.transformer_fc(pcc_vector, mode='finetune') #Forward pass en tst 2
 
@@ -84,6 +108,10 @@ class DualStreamModel(nn.Module):
             h_ts = self.proj_head_1(h_ts)
         if self.proj_head_2 is not None:
             h_fc = self.proj_head_2(h_fc)
+
+        # Logits de la rama temporal antes de fusionar. No se detachan: la
+        # pérdida auxiliar debe empujar a TST1 a ser discriminativo.
+        aux_logits = self.ts_classifier(h_ts) if self.ts_classifier is not None else None
 
         # Fusión
         if return_attention and hasattr(self.fusion, 'forward'):
@@ -105,12 +133,18 @@ class DualStreamModel(nn.Module):
             result.extend([fused, h_ts, h_fc])
         if return_attention and attention_weights is not None:
             result.append(attention_weights)
-
-        
+        if return_aux_logits:
+            if aux_logits is None:
+                raise RuntimeError(
+                    "return_aux_logits=True pero el clasificador auxiliar "
+                    "está deshabilitado (aux_enabled=False)."
+                )
+            # Se añade al final para no alterar el orden de los retornos
+            # existentes cuando se combina con return_features/attention.
+            result.append(aux_logits)
 
         if len(result) == 1:
             return result[0]
-        
         
         return tuple(result)
     
@@ -222,6 +256,8 @@ def create_dual_stream_model(
     mlp_dims: list | None = None,
     proj_head_1=None,
     proj_head_2=None,
+    aux_hidden_dim: int = 128,
+    aux_enabled: bool = False,
 ):
     fusion_config = {}
     if fusion_type == "attention_pooling" and fusion_hidden_dim is not None:
@@ -237,4 +273,6 @@ def create_dual_stream_model(
         mlp_dims=mlp_dims,
         proj_head_1=proj_head_1,
         proj_head_2=proj_head_2,
+        aux_hidden_dim=aux_hidden_dim,
+        aux_enabled=aux_enabled,
     )

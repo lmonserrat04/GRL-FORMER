@@ -135,6 +135,10 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
         ds = config["DUAL_STREAM"]
         fh = config.get("FUSION", {}).get("ATTENTION_POOLING", {}).get("HIDDEN_DIM")
         mlp_classiffier = config.get("MLP_HEAD")
+        aux_cfg = config.get("AUX_TS_HEAD", {}) or {}
+        aux_enabled = bool(aux_cfg.get("ENABLED", False))
+        aux_hidden_dim = int(aux_cfg.get("HIDDEN_DIM", 128))
+        aux_lambda = float(aux_cfg.get("LAMBDA", 0.5))
 
         # Projections congeladas (si se pasa ckpt contrastive)
         if ckpt_contrastive is not None:
@@ -152,6 +156,8 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
             mlp_dims = list(mlp_classiffier["MLP_DIMS"]),
             proj_head_1=p1,
             proj_head_2=p2,
+            aux_hidden_dim=aux_hidden_dim,
+            aux_enabled=aux_enabled,
         ).to(device)
 
 
@@ -167,7 +173,11 @@ def build_experiment(config, fold_idx=0, ckpt_contrastive=None):
         if p2 is not None:
             for p in model.proj_head_2.parameters(): p.requires_grad = False
 
-        task = ClassificationTask(device)
+        task = ClassificationTask(
+            device,
+            lambda_aux=aux_lambda,
+            use_aux=aux_enabled,
+        )
 
         train_loader, val_loader, _, _ = get_finetune_loaders(
             config, batch_size=phase["BATCH_SIZE"], num_workers=nw,
