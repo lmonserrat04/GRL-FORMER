@@ -18,6 +18,9 @@ procesando el grafo timestep a timestep con pesos compartidos:
            h_u(t) ← LayerNorm(h_u(t) + Dropout(psi([h_u(t) || m_u(t)])))
     5. Selección temporal por nodo:
            H_u = max_t h_u(t)          ->  (B, R, d)
+       Los timesteps se procesan en bloques independientes para aprovechar la
+       GPU. Cada timestep conserva su propio grafo y no hay mensajes entre
+       timesteps; el resultado es idéntico a recorrerlos uno a uno.
     6. Atención sobre nodos (ROIs):
            alpha_u = softmax_u(w^T tanh(W H_u))
            h_G = Σ_u alpha_u · H_u     ->  (B, d)
@@ -90,6 +93,7 @@ class GraphTemporalEncoder(nn.Module):
         dropout: float = 0.3,
         stride: int = 1,
         edge_dim: int = 1,
+        time_chunk: int = 16,
     ):
         super().__init__()
         self.n_rois = int(n_rois)
@@ -97,6 +101,7 @@ class GraphTemporalEncoder(nn.Module):
         self.knn = int(knn)
         self.stride = max(1, int(stride))
         self.edge_dim = int(edge_dim)
+        self.time_chunk = max(1, int(time_chunk))
 
         self.node_in = nn.Linear(1, d_model)
         self.node_norm = nn.LayerNorm(d_model)
@@ -116,7 +121,7 @@ class GraphTemporalEncoder(nn.Module):
         score.diagonal(dim1=-2, dim2=-1).zero_()
 
         k = max(1, min(self.knn, r - 1))
-        nbr = score.topk(k, dim=-1).indices                      # (B,R,k)
+        nbr = score.topk(k, dim=-1, sorted=False).indices        # (B,R,k)
         node = torch.arange(r, device=z_t.device).view(1, r, 1).expand(b, r, k)
 
         u_idx = torch.cat([node, nbr], dim=-1).reshape(b, -1)    # receptor
@@ -145,29 +150,35 @@ class GraphTemporalEncoder(nn.Module):
         h0 = self.node_norm(self.node_in(z.unsqueeze(-1)))       # (B,T,R,d)
         h0 = h0.index_select(1, times)                           # (B,Te,R,d)
 
-        off = (torch.arange(b, device=z.device) * r).view(b, 1)
         best: torch.Tensor | None = None
 
-        # Timestep a timestep: grafo dinámico + GNN de pesos compartidos.
-        for idx, step in enumerate(times.tolist()):
-            z_t = z[:, step]                                     # (B,R)
-            u_idx, v_idx = self._build_graph(z_t)                # (B,E)
-            e = self._edge_values(z_t, u_idx, v_idx)             # (B,E,1)
+        # Bloques de timesteps independientes: no hay mensajes entre tiempos.
+        # Cada timestep conserva su propio grafo dinámico y sus pesos compartidos.
+        for start in range(0, te, self.time_chunk):
+            stop = min(start + self.time_chunk, te)
+            chunk = stop - start
+            z_c = z.index_select(1, times[start:stop])           # (B,C,R)
+            z_f = z_c.reshape(b * chunk, r)                      # (B·C,R)
 
+            u_idx, v_idx = self._build_graph(z_f)                # (B·C,E)
+            e = self._edge_values(z_f, u_idx, v_idx)             # (B·C,E,1)
+
+            n = b * chunk
+            off = (torch.arange(n, device=z.device) * r).view(n, 1)
             lin_u = (off + u_idx).reshape(-1)
             lin_v = (off + v_idx).reshape(-1)
-            deg = torch.zeros(b * r, 1, device=z.device, dtype=z.dtype)
+            deg = torch.zeros(n * r, 1, device=z.device, dtype=z.dtype)
             deg.index_add_(
                 0, lin_u,
                 torch.ones(lin_u.numel(), 1, device=z.device, dtype=z.dtype),
             )
             deg.clamp_min_(1.0)
 
-            h = h0[:, idx].reshape(b * r, self.d_model)
-            ef = e.reshape(b * e.size(1), self.edge_dim)
+            h = h0[:, start:stop].reshape(n * r, self.d_model)
+            ef = e.reshape(n * e.size(1), self.edge_dim)
             for layer in self.layers:
                 h = layer(h, ef, lin_u, lin_v, deg)
-            h = h.view(b, r, self.d_model)
+            h = h.view(b, chunk, r, self.d_model).amax(dim=1)    # (B,R,d)
 
             best = h if best is None else torch.maximum(best, h)
 
@@ -235,6 +246,7 @@ class TemporalGNN(nn.Module):
         num_layers: int = 2,
         dropout: float = 0.3,
         stride: int = 1,
+        time_chunk: int = 16,
         clf_hidden: tuple[int, ...] = (32, 16),
         clf_dropout: float = 0.5,
         num_classes: int = 2,
@@ -244,6 +256,7 @@ class TemporalGNN(nn.Module):
         self.d_model = int(d_model)
         self.knn = int(knn)
         self.stride = max(1, int(stride))
+        self.time_chunk = max(1, int(time_chunk))
 
         self.encoder = GraphTemporalEncoder(
             n_rois=n_rois,
@@ -252,6 +265,7 @@ class TemporalGNN(nn.Module):
             num_layers=num_layers,
             dropout=dropout,
             stride=stride,
+            time_chunk=time_chunk,
         )
         self.classifier = NodeAttentionClassifier(
             d_model=d_model,

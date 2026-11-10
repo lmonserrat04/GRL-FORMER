@@ -23,6 +23,7 @@ GNN_DEFAULTS: dict[str, Any] = {
     "NUM_LAYERS": 2,
     "DROPOUT": 0.3,
     "STRIDE": 1,
+    "TIME_CHUNK": 16,
     "CLF_HIDDEN": [32, 16],
     "CLF_DROPOUT": 0.5,
     "N_EPOCHS": 500,
@@ -45,6 +46,8 @@ def resolve_gnn_config(cfg: dict, overrides: dict | None = None) -> dict:
         raise ValueError("GNN.D_MODEL debe ser >= 1")
     if int(gnn["KNN"]) < 1:
         raise ValueError("GNN.KNN debe ser >= 1")
+    if int(gnn["TIME_CHUNK"]) < 1:
+        raise ValueError("GNN.TIME_CHUNK debe ser >= 1")
 
     cfg["GNN"] = gnn
     cfg["EVAL_PROTOCOL"] = "loso"
@@ -63,6 +66,7 @@ def build_gnn_model(cfg: dict) -> TemporalGNN:
         num_layers=int(g["NUM_LAYERS"]),
         dropout=float(g["DROPOUT"]),
         stride=int(g.get("STRIDE", 1)),
+        time_chunk=int(g.get("TIME_CHUNK", 16)),
         clf_hidden=tuple(int(x) for x in g.get("CLF_HIDDEN", (32, 16))),
         clf_dropout=float(g.get("CLF_DROPOUT", 0.5)),
     ).to(cfg["DEVICE"])

@@ -47,6 +47,7 @@ def parse_args():
     p.add_argument("--layers", type=int, default=None)
     p.add_argument("--dropout", type=float, default=None)
     p.add_argument("--stride", type=int, default=None)
+    p.add_argument("--time-chunk", type=int, default=None)
     p.add_argument("--clf-hidden", type=int, nargs="+", default=None)
     p.add_argument("--clf-dropout", type=float, default=None)
     return p.parse_args()
@@ -70,6 +71,7 @@ def main():
         "NUM_LAYERS": args.layers,
         "DROPOUT": args.dropout,
         "STRIDE": args.stride,
+        "TIME_CHUNK": args.time_chunk,
         "CLF_HIDDEN": args.clf_hidden,
         "CLF_DROPOUT": args.clf_dropout,
     }
@@ -99,7 +101,8 @@ def main():
     print(f"Sujetos={len(data['labels'])} | sitios={n_folds} | T={g['T']} | "
           f"d={g['D_MODEL']} | k={g['KNN']} | layers={g['NUM_LAYERS']} | "
           f"dropout={g['DROPOUT']} | stride={g['STRIDE']} | "
-          f"batch={g['BATCH_SIZE']} | epochs={g['N_EPOCHS']}")
+          f"chunk={g['TIME_CHUNK']} | batch={g['BATCH_SIZE']} | "
+          f"epochs={g['N_EPOCHS']}")
     print(f"Folds: {folds}")
     print(f"Salida: {exp_dir}")
     print("=" * 78)

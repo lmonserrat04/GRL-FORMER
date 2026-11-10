@@ -155,7 +155,8 @@ def fit_fold(cfg: dict, fold_idx: int, ckpt_dir: Path) -> dict:
     print(f"\n{'─' * 74}")
     print(f"Fold {fold_idx:2d} | {site:>10s} | train={n_train} val={n_val} test={n_test}")
     print(f"  T={t_use} | d={g['D_MODEL']} | k={g['KNN']} | "
-          f"layers={g['NUM_LAYERS']} | stride={g['STRIDE']}")
+          f"layers={g['NUM_LAYERS']} | stride={g['STRIDE']} | "
+          f"chunk={g['TIME_CHUNK']}")
 
     best_auc, best_state, best_epoch, bad = -1.0, None, 0, 0
     t0 = time.time()
