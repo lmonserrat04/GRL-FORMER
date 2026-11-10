@@ -406,7 +406,7 @@ def save_seed_artifacts(
             preds_youden=np.asarray(
                 [r["pred_youden"] for r in rows], dtype=np.int64
             ),
-            sites=np.asarray([r["site"] for r in rows], dtype=object),
+            sites=np.asarray([r["site"] for r in rows], dtype=str),
             folds=np.asarray([r["fold_idx"] for r in rows], dtype=np.int64),
             optimal_thr=np.asarray(
                 [r["optimal_thr"] for r in rows], dtype=np.float64
