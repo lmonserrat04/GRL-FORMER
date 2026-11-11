@@ -61,6 +61,14 @@ AUX_TS_HEAD:
 
 ## Ejecución (GPU remota)
 
+Pipeline completo en un comando (desde la raíz del repo):
+
+```bash
+bash scripts/pipelines/run_dx_site_experiment.sh
+```
+
+Pasos individuales:
+
 ```bash
 # 1. Contrastive (reutiliza pretrain)
 python scripts/train/run_contrastive_only.py \
