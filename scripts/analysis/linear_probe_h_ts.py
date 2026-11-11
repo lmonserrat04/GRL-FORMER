@@ -29,13 +29,17 @@ Representaciones
               la proyección contrastiva.
   h_ts_proj : salida después de proj_head_1 (128 dims). Es el vector que
               entra a la fusión y al clasificador auxiliar.
+  h_fc_raw  : salida del Transformer de conectividad TST2 (256 dims).
+  h_fc_proj : salida después de proj_head_2 (128 dims).
+  fused     : salida del módulo de fusión (vector que entra al clasificador).
 
 Uso
 ---
     python scripts/analysis/linear_probe_h_ts.py \
         --run-dir experiments_finetune_only/20261110_200401_ts_aux_loss_lambda1_loso \
         --ckpt-contrastive experiments/20260928_160330_transformer_baseline/checkpoints/contrastive_global.pt \
-        --eval-protocol loso
+        --eval-protocol loso \
+        --representations h_ts_raw h_ts_proj h_fc_raw h_fc_proj fused
 
 Salidas (por defecto en <run-dir>/linear_probe_h_ts/):
     linear_probe_h_ts_by_site.csv
@@ -62,7 +66,18 @@ from data.loaders.dataloader import get_finetune_loaders
 from training.setup import build_experiment
 
 
-VALID_REPS = ("h_ts_raw", "h_ts_proj")
+VALID_REPS = ("h_ts_raw", "h_ts_proj", "h_fc_raw", "h_fc_proj", "fused")
+DEFAULT_REPS = ("h_ts_raw", "h_ts_proj")
+
+
+def rep_column(rep: str) -> str:
+    """Nombre de columna del probe.
+
+    ``auc_fused`` ya está reservado para la referencia del modelo completo
+    (preds_fold_*.npz); el probe sobre la representación fused se guarda
+    como ``auc_fused_probe`` para no duplicar columnas.
+    """
+    return "auc_fused_probe" if rep == "fused" else f"auc_{rep}"
 
 
 def resolve_contrastive_checkpoint(run_dir: Path, config: dict,
@@ -108,31 +123,49 @@ def make_eval_loader(loader: DataLoader, batch_size: int) -> DataLoader:
 
 
 def extract_h_ts(model, loader: DataLoader, device: str) -> dict:
-    """Extrae h_ts_raw y h_ts_proj de un loader, sin entrenar nada."""
+    """Extrae representaciones de un loader, sin entrenar nada.
+
+    Devuelve h_ts_raw, h_ts_proj, h_fc_raw, h_fc_proj y fused.
+    """
     model.eval()
-    raw_chunks, proj_chunks, label_chunks = [], [], []
+    raw_chunks, ts_proj_chunks = [], []
+    fc_raw_chunks, fc_proj_chunks, fused_chunks = [], [], []
+    label_chunks = []
 
     with torch.inference_mode():
         for batch in loader:
             ts = batch["timeseries"].to(device, non_blocking=True)
+            pcc = batch["pcc_vector"].to(device, non_blocking=True)
             y = batch["label"].cpu().numpy()
 
             h_raw = model.transformer_ts(ts, mode="finetune")
+            h_fc_raw = model.transformer_fc(pcc, mode="finetune")
             if model.proj_head_1 is not None:
                 h_proj = model.proj_head_1(h_raw)
             else:
                 h_proj = h_raw
+            if model.proj_head_2 is not None:
+                h_fc_proj = model.proj_head_2(h_fc_raw)
+            else:
+                h_fc_proj = h_fc_raw
+            fused = model.fusion(h_proj, h_fc_proj)
 
             raw_chunks.append(h_raw.detach().cpu().numpy())
-            proj_chunks.append(h_proj.detach().cpu().numpy())
+            ts_proj_chunks.append(h_proj.detach().cpu().numpy())
+            fc_raw_chunks.append(h_fc_raw.detach().cpu().numpy())
+            fc_proj_chunks.append(h_fc_proj.detach().cpu().numpy())
+            fused_chunks.append(fused.detach().cpu().numpy())
             label_chunks.append(y)
 
     if not raw_chunks:
-        raise RuntimeError("Loader vacío al extraer h_ts.")
+        raise RuntimeError("Loader vacío al extraer representaciones.")
 
     return {
         "h_ts_raw": np.concatenate(raw_chunks, axis=0).astype(np.float32),
-        "h_ts_proj": np.concatenate(proj_chunks, axis=0).astype(np.float32),
+        "h_ts_proj": np.concatenate(ts_proj_chunks, axis=0).astype(np.float32),
+        "h_fc_raw": np.concatenate(fc_raw_chunks, axis=0).astype(np.float32),
+        "h_fc_proj": np.concatenate(fc_proj_chunks, axis=0).astype(np.float32),
+        "fused": np.concatenate(fused_chunks, axis=0).astype(np.float32),
         "labels": np.concatenate(label_chunks, axis=0).astype(np.int64),
     }
 
@@ -233,9 +266,9 @@ def main():
     parser.add_argument("--ckpt-contrastive", default=None,
                         help="contrastive_global.pt para construir las proj heads. "
                              "Si se omite, se busca en config.yaml o results.json.")
-    parser.add_argument("--representations", nargs="+", default=list(VALID_REPS),
+    parser.add_argument("--representations", nargs="+", default=list(DEFAULT_REPS),
                         choices=list(VALID_REPS),
-                        help="Representaciones a probar (default: ambas).")
+                        help="Representaciones a probar (default: h_ts_raw h_ts_proj).")
     parser.add_argument("--C", type=float, default=1.0,
                         help="Inverso de la regularización L2 de la logística.")
     parser.add_argument("--max-iter", type=int, default=2000)
@@ -406,7 +439,7 @@ def main():
 
             if len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
                 print(f"  [SKIP] {rep}: una sola clase en train o test")
-                row[f"auc_{rep}"] = float("nan")
+                row[rep_column(rep)] = float("nan")
                 continue
 
             probs = fit_logistic_probe(
@@ -414,7 +447,7 @@ def main():
                 C=args.C, max_iter=args.max_iter,
             )
             auc = float(roc_auc_score(y_test, probs))
-            row[f"auc_{rep}"] = auc
+            row[rep_column(rep)] = auc
             labels_per_site[rep].append(y_test)
             probs_per_site[rep].append(probs)
             print(f"  probe {rep:<10s} AUC={auc:.4f}  "
@@ -452,7 +485,7 @@ def main():
 
     df = pd.DataFrame(rows)
     base_cols = ["fold", "site", "n_train", "n_test", "n_td", "n_asd"]
-    rep_cols = [f"auc_{rep}" for rep in args.representations]
+    rep_cols = [rep_column(rep) for rep in args.representations]
     df = df[base_cols + rep_cols + ["auc_fused"]]
     df = df.sort_values("fold").reset_index(drop=True)
 
@@ -462,7 +495,7 @@ def main():
 
     representations_summary = {}
     for rep in args.representations:
-        aucs = df[f"auc_{rep}"].dropna().to_numpy(dtype=float)
+        aucs = df[rep_column(rep)].dropna().to_numpy(dtype=float)
         if aucs.size == 0:
             representations_summary[rep] = {
                 "n_sites": 0,
@@ -602,7 +635,7 @@ def main():
         line = (f"| {int(r['fold'])} | {r['site']} | {int(r['n_train'])} | "
                 f"{int(r['n_test'])} | {int(r['n_td'])} | {int(r['n_asd'])} |")
         for rep in args.representations:
-            line += f" {fmt(float(r[f'auc_{rep}']))} |"
+            line += f" {fmt(float(r[rep_column(rep)]))} |"
         line += f" {fmt(float(r['auc_fused']))} |"
         md.append(line)
 

@@ -67,6 +67,62 @@ def compute_metrics(
     return metrics
 
 
+def expected_calibration_error(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    n_bins: int = 10,
+) -> float:
+    """Expected Calibration Error (ECE) con bins de igual ancho.
+
+    ECE = Σ_b (n_b / N) · |acc(b) − conf(b)|
+
+    donde ``conf(b)`` es la confianza media de la clase predicha
+    (``max(p, 1-p)``) y ``acc(b)`` la accuracy de la predicción binaria
+    (umbral 0.5) en el bin.
+
+    Args:
+        y_true: etiquetas reales (n,).
+        y_prob: probabilidad de la clase positiva (n,).
+        n_bins: número de bins en [0, 1].
+
+    Returns:
+        ECE en [0, 1].
+    """
+    y_true = np.asarray(y_true).astype(int).reshape(-1)
+    y_prob = np.clip(np.asarray(y_prob, dtype=float).reshape(-1), 0.0, 1.0)
+    if y_true.shape != y_prob.shape:
+        raise ValueError("y_true e y_prob deben tener la misma longitud.")
+    if y_true.size == 0:
+        return float("nan")
+
+    confidence = np.maximum(y_prob, 1.0 - y_prob)
+    y_pred = (y_prob >= 0.5).astype(int)
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    # right=True → el borde superior pertenece al bin anterior; el valor
+    # 1.0 cae en el último bin.
+    bin_ids = np.digitize(confidence, bin_edges[1:-1], right=True)
+    bin_ids = np.clip(bin_ids, 0, n_bins - 1)
+
+    ece = 0.0
+    n = y_true.size
+    for b in range(n_bins):
+        mask = bin_ids == b
+        n_b = int(mask.sum())
+        if n_b == 0:
+            continue
+        conf = float(confidence[mask].mean())
+        acc = float((y_pred[mask] == y_true[mask]).mean())
+        ece += (n_b / n) * abs(acc - conf)
+    return float(ece)
+
+
+def brier_score(y_true: np.ndarray, y_prob: np.ndarray) -> float:
+    """Brier score: MSE entre la probabilidad y la etiqueta binaria."""
+    y_true = np.asarray(y_true).astype(float).reshape(-1)
+    y_prob = np.asarray(y_prob, dtype=float).reshape(-1)
+    return float(np.mean((y_prob - y_true) ** 2))
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Bootstrap CI
 # ──────────────────────────────────────────────────────────────────────

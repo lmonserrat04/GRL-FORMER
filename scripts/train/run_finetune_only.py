@@ -31,7 +31,14 @@ from utils.metrics import bootstrap_confidence_interval
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt-dir", required=True,
-                        help="Directorio con best_pt_ts_fold_0.pt, best_pt_fc_fold_0.pt, contrastive_global.pt")
+                        help="Directorio con best_pt_ts_fold_0.pt, best_pt_fc_fold_0.pt y "
+                             "(opcionalmente) contrastive_global.pt")
+    parser.add_argument("--pretrain-ckpt-dir", default=None,
+                        help="Directorio de los checkpoints de pretrain. "
+                             "Default: --ckpt-dir")
+    parser.add_argument("--contrastive-ckpt", default=None,
+                        help="contrastive_global.pt a usar. "
+                             "Default: <ckpt-dir>/contrastive_global.pt")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-name", default="finetune_only")
     parser.add_argument("--out-root", default="experiments_finetune_only")
@@ -42,20 +49,28 @@ def main():
     ckpt_dir = Path(args.ckpt_dir)
     if not ckpt_dir.exists():
         raise SystemExit(f"No existe {ckpt_dir}")
-    required = ["best_pt_ts_fold_0.pt", "best_pt_fc_fold_0.pt", "contrastive_global.pt"]
-    for f in required:
-        p = ckpt_dir / f
-        if not p.exists():
-            raise SystemExit(f"Falta {p}")
+
+    pretrain_dir = Path(args.pretrain_ckpt_dir) if args.pretrain_ckpt_dir else ckpt_dir
+    if not pretrain_dir.exists():
+        raise SystemExit(f"No existe {pretrain_dir}")
+
+    contrastive_ckpt = (Path(args.contrastive_ckpt) if args.contrastive_ckpt
+                        else ckpt_dir / "contrastive_global.pt")
+
+    for name in ("best_pt_ts_fold_0.pt", "best_pt_fc_fold_0.pt"):
+        if not (pretrain_dir / name).exists():
+            raise SystemExit(f"Falta {pretrain_dir / name}")
+    if not contrastive_ckpt.exists():
+        raise SystemExit(f"Falta {contrastive_ckpt}")
 
     # Cargar config base del repo
     with open("config/config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     # Ajustes
-    cfg["CKPT_TST1"] = str(ckpt_dir / "best_pt_ts_fold_0.pt")
-    cfg["CKPT_TST2"] = str(ckpt_dir / "best_pt_fc_fold_0.pt")
-    cfg["CKPT_CONTRASTIVE"] = str(ckpt_dir / "contrastive_global.pt")
+    cfg["CKPT_TST1"] = str(pretrain_dir / "best_pt_ts_fold_0.pt")
+    cfg["CKPT_TST2"] = str(pretrain_dir / "best_pt_fc_fold_0.pt")
+    cfg["CKPT_CONTRASTIVE"] = str(contrastive_ckpt)
     cfg["DEVICE"] = "cuda" if torch.cuda.is_available() else "cpu"
     cfg["EVAL_PROTOCOL"] = "loso"
     cfg["SEED"] = args.seed
@@ -83,11 +98,14 @@ def main():
     cfg["CHECKPOINTS_PATH"] = str(out_dir / "checkpoints")
     cfg["EXP_ID"] = exp_id
 
-    # Copiar config usado
-    shutil.copy("config/config.yaml", out_dir / "config.yaml")
+    # Guardar la config efectivamente usada (con las rutas de checkpoints).
+    with open(out_dir / "config.yaml", "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+    shutil.copy("config/config.yaml", out_dir / "config_repo.yaml")
 
     print(f"Seed:        {args.seed}")
-    print(f"Checkpoints: {ckpt_dir}")
+    print(f"Pretrain:    {pretrain_dir}")
+    print(f"Contrastive: {contrastive_ckpt}")
     print(f"Run name:    {args.run_name}")
     print(f"Output:      {out_dir}\n")
 
@@ -113,7 +131,8 @@ def main():
         "seed": args.seed,
         "exp_id": exp_id,
         "run_name": args.run_name,
-        "ckpt_dir": str(ckpt_dir),
+        "ckpt_dir": str(pretrain_dir),
+        "ckpt_contrastive": str(contrastive_ckpt),
     }
     for metric in metric_names:
         vals = [m[metric] for m in fold_metrics]

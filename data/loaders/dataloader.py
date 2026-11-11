@@ -148,10 +148,11 @@ def load_raw_data(config: dict, use_interp: bool = None) -> dict:
 
 class TwoTSTDataset(Dataset):
     def __init__(self, timeseries, pcc_vectors, labels,
-                 normalize_ts=True, normalize_pcc=True):
+                 normalize_ts=True, normalize_pcc=True, sites=None):
         self.timeseries = timeseries.astype(np.float32)
         self.pcc_vectors = pcc_vectors.astype(np.float32)
         self.labels = labels.astype(np.int64)
+        self.sites = None if sites is None else np.asarray(sites)
 
         if normalize_ts:
             mean = self.timeseries.mean(axis=(1, 2), keepdims=True)
@@ -167,11 +168,14 @@ class TwoTSTDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        return {
+        item = {
             "timeseries": torch.from_numpy(self.timeseries[idx]),
             "pcc_vector": torch.from_numpy(self.pcc_vectors[idx]),
             "label":      torch.tensor(self.labels[idx], dtype=torch.long),
         }
+        if self.sites is not None:
+            item["site"] = str(self.sites[idx])
+        return item
 
 
 class PretrainTSDataset(Dataset):
@@ -345,6 +349,91 @@ def get_single_split_loaders(
         "subject_indices": subject_indices,
     }
     return train_loader, val_loader, test_loader, split_info
+def get_contrastive_loaders(
+    config: dict,
+    batch_size: int = 32,
+    num_workers: int = 4,
+    train_ratio: float = 0.70,
+    val_ratio: float = 0.10,
+    test_ratio: float = 0.20,
+    seed: int = 42,
+    min_sites_per_class: int = 4,
+):
+    """Loaders de la fase contrastiva con batches balanceados por diagnóstico.
+
+    A diferencia de ``get_single_split_loaders``, los batches de train y val
+    se construyen con :class:`DiagnosisSiteBalancedSampler`: 16 sujetos por
+    clase y al menos ``min_sites_per_class`` sitios distintos por clase.
+
+    Returns:
+        (train_loader, val_loader, test_loader, split_info)
+    """
+    from data.loaders.samplers import DiagnosisSiteBalancedSampler
+
+    data = load_raw_data(config)
+    labels = data["labels"]
+    subject_indices = data["subject_indices"]
+    site_ids = data["site_ids"]
+
+    train_idx, val_idx, test_idx = get_subject_level_train_val_test_split(
+        labels, subject_indices, site_ids=site_ids,
+        train_ratio=train_ratio, val_ratio=val_ratio, test_ratio=test_ratio,
+        seed=seed,
+    )
+
+    ts, pcc = data["timeseries"], data["pcc_vectors"]
+
+    train_ds = TwoTSTDataset(
+        ts[train_idx], pcc[train_idx], labels[train_idx], sites=site_ids[train_idx]
+    )
+    val_ds = TwoTSTDataset(
+        ts[val_idx], pcc[val_idx], labels[val_idx], sites=site_ids[val_idx]
+    )
+    test_ds = TwoTSTDataset(
+        ts[test_idx], pcc[test_idx], labels[test_idx], sites=site_ids[test_idx]
+    )
+
+    train_sampler = DiagnosisSiteBalancedSampler(
+        labels[train_idx], site_ids[train_idx],
+        batch_size=batch_size,
+        min_sites_per_class=min_sites_per_class,
+        seed=seed,
+        drop_last=True,
+    )
+    val_sampler = DiagnosisSiteBalancedSampler(
+        labels[val_idx], site_ids[val_idx],
+        batch_size=batch_size,
+        min_sites_per_class=min_sites_per_class,
+        seed=seed + 1,
+        drop_last=False,
+    )
+
+    pin = torch.cuda.is_available()
+    train_loader = DataLoader(
+        train_ds, batch_sampler=train_sampler,
+        num_workers=num_workers, pin_memory=pin,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_sampler=val_sampler,
+        num_workers=num_workers, pin_memory=pin,
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=pin,
+    )
+
+    split_info = {
+        "train_idx": train_idx,
+        "val_idx": val_idx,
+        "test_idx": test_idx,
+        "subject_indices": subject_indices,
+        "eval_protocol": "single_split",
+        "sampler": "diagnosis_site_balanced",
+        "min_sites_per_class": int(min_sites_per_class),
+    }
+    return train_loader, val_loader, test_loader, split_info
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Tests (usan .1D sintéticos en disco)
 # ──────────────────────────────────────────────────────────────────────

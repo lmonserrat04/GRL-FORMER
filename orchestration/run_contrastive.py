@@ -25,6 +25,7 @@ def run_contrastive(config: dict):
     print(f"[orchestration] FASE 3: Contrastive GLOBAL")
     print(f"  TST1 ← {config['CKPT_TST1']}")
     print(f"  TST2 ← {config['CKPT_TST2']}")
+    print(f"  objetivo: {config['T_CONTRASTIVE'].get('OBJECTIVE', 'subject')}")
     print(f"  epochs : {config['T_CONTRASTIVE']['N_EPOCHS']}")
     print(f"  τ      : {config['T_CONTRASTIVE']['TEMPERATURE']}")
     print(f"  freeze : TST1 (unfreeze TST2)")
