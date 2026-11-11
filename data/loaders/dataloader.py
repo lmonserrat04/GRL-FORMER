@@ -349,6 +349,8 @@ def get_single_split_loaders(
         "subject_indices": subject_indices,
     }
     return train_loader, val_loader, test_loader, split_info
+
+
 def get_contrastive_loaders(
     config: dict,
     batch_size: int = 32,
@@ -359,16 +361,19 @@ def get_contrastive_loaders(
     seed: int = 42,
     min_sites_per_class: int = 4,
 ):
-    """Loaders de la fase contrastiva con batches balanceados por diagnóstico.
+    """Loaders de la fase contrastiva con batches estratificados por diagnóstico.
 
     A diferencia de ``get_single_split_loaders``, los batches de train y val
-    se construyen con :class:`DiagnosisSiteBalancedSampler`: 16 sujetos por
-    clase y al menos ``min_sites_per_class`` sitios distintos por clase.
+    se construyen con :class:`DiagnosisStratifiedSampler`: 32 sujetos
+    muestreados según la prevalencia de cada diagnóstico en el split, sin
+    conteos fijos, y validados para que ambas clases estén presentes, cada
+    una aporte sujetos de >= ``min_sites_per_class`` sitios y toda ancla
+    tenga al menos un positivo válido (mismo diagnóstico, sitio distinto).
 
     Returns:
         (train_loader, val_loader, test_loader, split_info)
     """
-    from data.loaders.samplers import DiagnosisSiteBalancedSampler
+    from data.loaders.samplers import DiagnosisStratifiedSampler
 
     data = load_raw_data(config)
     labels = data["labels"]
@@ -393,14 +398,14 @@ def get_contrastive_loaders(
         ts[test_idx], pcc[test_idx], labels[test_idx], sites=site_ids[test_idx]
     )
 
-    train_sampler = DiagnosisSiteBalancedSampler(
+    train_sampler = DiagnosisStratifiedSampler(
         labels[train_idx], site_ids[train_idx],
         batch_size=batch_size,
         min_sites_per_class=min_sites_per_class,
         seed=seed,
         drop_last=True,
     )
-    val_sampler = DiagnosisSiteBalancedSampler(
+    val_sampler = DiagnosisStratifiedSampler(
         labels[val_idx], site_ids[val_idx],
         batch_size=batch_size,
         min_sites_per_class=min_sites_per_class,
@@ -428,8 +433,9 @@ def get_contrastive_loaders(
         "test_idx": test_idx,
         "subject_indices": subject_indices,
         "eval_protocol": "single_split",
-        "sampler": "diagnosis_site_balanced",
+        "sampler": "diagnosis_stratified",
         "min_sites_per_class": int(min_sites_per_class),
+        "class_probs": train_sampler.class_probs.tolist(),
     }
     return train_loader, val_loader, test_loader, split_info
 

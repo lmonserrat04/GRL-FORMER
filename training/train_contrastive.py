@@ -189,8 +189,11 @@ def run_contrastive_global(config, save_dir=None):
 
     print(f"  Objetivo contrastivo: {objective}")
     if objective == "diagnosis_site":
-        print(f"  Batch sampler: 16/16 por clase, "
-              f">= {split_info.get('min_sites_per_class')} sitios por clase")
+        probs = split_info.get("class_probs") or []
+        probs_txt = " / ".join(f"{p:.3f}" for p in probs)
+        print(f"  Batch sampler: estratificado por diagnóstico "
+              f"(p = {probs_txt}), >= {split_info.get('min_sites_per_class')} "
+              f"sitios por clase, positivos validados")
 
     with tqdm(range(1, epochs + 1), unit="epoch") as tepoch:
         for epoch in tepoch:
@@ -241,7 +244,9 @@ def run_contrastive_global(config, save_dir=None):
         "best_val_loss": float(best_val),
         "batch_size": int(phase["BATCH_SIZE"]),
         "temperature": float(phase["TEMPERATURE"]),
-        "min_sites_per_class": int(split_info.get("min_sites_per_class", 0) or 0),
+        "sampler": split_info.get("sampler"),
+        "min_sites_per_class": split_info.get("min_sites_per_class"),
+        "class_probs": split_info.get("class_probs"),
         "split_sizes": {
             "train": int(len(split_info["train_idx"])),
             "val": int(len(split_info["val_idx"])),

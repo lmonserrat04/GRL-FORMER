@@ -19,14 +19,18 @@ diagnóstico y mismo sitio.
 
 ## Batch sampler
 
-`DiagnosisSiteBalancedSampler` (`data/loaders/samplers.py`):
+`DiagnosisStratifiedSampler` (`data/loaders/samplers.py`):
 
-- 16 ASD + 16 TD por batch.
-- Al menos 4 sitios distintos por diagnóstico.
-- Reintenta el batch si no se cumple la cobertura (con fallback para clases
-  con menos de 4 sitios).
-- Los sujetos de una celda (diagnóstico, sitio) pequeña pueden aparecer, pero
-  un batch no repite sujetos mientras haya suficientes.
+- Batch de 32 con muestreo **estratificado por diagnóstico según la
+  prevalencia de la cohorte**, sin conteos fijos por clase.
+- Cada batch se valida y, si falla, se vuelve a muestrear:
+  1. ambas diagnosis están presentes;
+  2. cada diagnóstico aporta sujetos de al menos 4 sitios distintos;
+  3. cada ancla tiene al menos un positivo válido (mismo diagnóstico,
+     sitio distinto).
+- La condición 3 se cumple automáticamente si se cumple la 2, pero se
+  verifica explícitamente.
+- Sujetos sin reemplazo dentro de un batch.
 
 ## Loss
 
