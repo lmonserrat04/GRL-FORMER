@@ -177,9 +177,9 @@ def run_contrastive_global(config, save_dir=None):
         config, phase, objective
     )
 
-    epochs = phase["N_EPOCHS"]
-    patience = phase.get("PATIENCE", 20)
-    min_delta = phase.get("MIN_DELTA", 1e-4)
+    epochs = int(phase["N_EPOCHS"])
+    patience = int(phase.get("PATIENCE", 20))
+    min_delta = float(phase.get("MIN_DELTA", 1e-4))
 
     best_val = float("inf")
     best_epoch = 0
