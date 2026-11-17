@@ -105,7 +105,8 @@ T_CONTRASTIVE:
   # diagnosis_site : positivo = mismo diagnóstico de otro sitio
   OBJECTIVE: diagnosis_site
   MIN_SITES_PER_CLASS: 4
-  PATIENCE: 20
+  # Patience == N_EPOCHS: corre las 50 epocas contrastivas completas.
+  PATIENCE: 50
   MIN_DELTA: 0.0001
 
 FINETUNING:
